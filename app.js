@@ -865,16 +865,25 @@
   }
 
   let mermaidLoadPromise=null;
+  let mermaidConfiguredTheme=null;
   const mermaidPreviewTimers=new Map();
   const mermaidRenderTokens=new Map();
   let mermaidRenderSequence=0;
+
+  function currentMermaidTheme(){ return document.body.classList.contains('dark')?'dark':'default'; }
+  function configureMermaidTheme(api){
+    const theme=currentMermaidTheme();
+    if(mermaidConfiguredTheme===theme) return;
+    api.initialize({startOnLoad:false,securityLevel:'strict',theme,suppressErrorRendering:true,fontFamily:'Inter, system-ui, sans-serif'});
+    mermaidConfiguredTheme=theme;
+  }
 
   function ensureMermaidLibrary(){
     if(mermaidLoadPromise) return mermaidLoadPromise;
     mermaidLoadPromise=import('https://cdn.jsdelivr.net/npm/mermaid@12/dist/mermaid.esm.min.mjs')
       .then(module=>{
         const api=module.default||module;
-        api.initialize({startOnLoad:false,securityLevel:'strict',theme:'dark',suppressErrorRendering:true,fontFamily:'Inter, system-ui, sans-serif'});
+        configureMermaidTheme(api);
         return api;
       })
       .catch(error=>{ mermaidLoadPromise=null; throw new Error(`Could not load Mermaid: ${error?.message||error}`); });
@@ -908,6 +917,7 @@
     try{
       const api=await ensureMermaidLibrary();
       if(mermaidRenderTokens.get(b.id)!==token || !row.isConnected) return;
+      configureMermaidTheme(api);
       const renderId=`novera-mermaid-${++mermaidRenderSequence}`;
       const result=await api.render(renderId,source);
       if(mermaidRenderTokens.get(b.id)!==token || !row.isConnected) return;
@@ -1940,6 +1950,8 @@
     let dark=false;
     if(state.theme==='dark')dark=true; else if(state.theme==='system')dark=matchMedia('(prefers-color-scheme: dark)').matches;
     document.body.classList.toggle('dark',dark); updateSettingsText();
+    mermaidConfiguredTheme=null;
+    scheduleMermaidPreviews();
   }
   function cycleTheme(){ const options=['system','light','dark']; state.theme=options[(options.indexOf(state.theme)+1)%options.length]; scheduleSave(); applyTheme(); toast(`Theme: ${state.theme}`); }
   function updateSettingsText(){ if(els.themeToggle) els.themeToggle.innerHTML=`<span class="select-btn-label">${state.theme[0].toUpperCase()+state.theme.slice(1)}</span>${chevronSvg('down','select-chevron')}`; }

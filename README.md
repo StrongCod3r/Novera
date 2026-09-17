@@ -86,6 +86,7 @@ The Files/Favorites sidebar keeps vertical overflow disabled unless its current 
 - Searchable, scrollable page icon picker with external SVG/PNG/JPG/WEBP/GIF/ICO support.
 
 - Mermaid code language with syntax highlighting and live diagram preview. Mermaid 12 is loaded on demand from jsDelivr when a diagram preview is shown.
+- Code blocks now follow the active light/dark theme, including syntax colors, toolbar, line numbers and Mermaid preview.
 
 ## Source layout
 
