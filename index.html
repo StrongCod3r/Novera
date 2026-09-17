@@ -755,7 +755,6 @@ body { background:var(--ribbon); }
       </div>
 
       <div class="sidebar-footer">
-        <button type="button" class="nav-item" id="settingsBtn"><span>⚙</span><span>Settings</span></button>
         <div class="vault-footer">
           <div class="vault-footer-label">Vault</div>
           <div class="vault-controls">
@@ -1977,7 +1976,6 @@ body { background:var(--ribbon); }
     if(e.target.closest('#addIconBtn')||e.target.closest('#pageIcon')){ showIconMenu(e.target.closest('#addIconBtn')||e.target.closest('#pageIcon')); return; }
     if(e.target.closest('#addCommentBtn')){ openComments(); return; }
     if(e.target.closest('#shareBtn')){ els.shareModal.classList.remove('hidden'); return; }
-    if(e.target.closest('#settingsBtn')){ updateSettingsText(); els.settingsModal.classList.remove('hidden'); return; }
     if(e.target.matches('[data-close-modal]')|| (e.target.classList.contains('modal-backdrop'))){ e.target.closest('.modal-backdrop')?.classList.add('hidden'); return; }
     if(e.target.closest('#publishToggle')){ e.target.closest('#publishToggle').classList.toggle('on'); toast('Public sharing updated'); return; }
     if(e.target.closest('#themeToggle')){ cycleTheme(); return; }
