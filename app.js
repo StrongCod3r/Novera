@@ -191,6 +191,7 @@
   let dragTabId = null;
   let activeImageBlockId = null;
   let activeImageLinkBlockId = null;
+  let pageOperationEpoch = 0;
   let saveTimer = null;
   let historyTimer = null;
   let historySuspended = false;
@@ -400,6 +401,7 @@
 
   function switchVault(id){
     if(!id || id===activeVaultId || !vaultRegistry.vaults.some(v=>v.id===id)) return;
+    cancelPageOperations();
     flushHistoryPending(activeVaultId); persistStateNow();
     activeVaultId=id; vaultRegistry.activeVaultId=id; saveVaultRegistry();
     state=loadState(); initializeHistoryForVault(activeVaultId); applyTheme(); renderAll();
@@ -436,6 +438,7 @@
     const duplicate=vaultRegistry.vaults.some(v=>v.name.trim().toLowerCase()===name.toLowerCase() && (vaultDialogMode!=='rename' || v.id!==activeVaultId));
     if(duplicate){ els.vaultDialogError.textContent='A vault with this name already exists.'; els.vaultDialogInput.focus(); els.vaultDialogInput.select(); return; }
     if(vaultDialogMode==='create'){
+      cancelPageOperations();
       persistStateNow();
       const id=uid('vault');
       vaultRegistry.vaults.push({id,name}); vaultRegistry.activeVaultId=id; activeVaultId=id; saveVaultRegistry();
@@ -452,6 +455,7 @@
   function deleteVault(){
     const meta=activeVaultMeta(); if(!meta || vaultRegistry.vaults.length<=1) return;
     if(!confirm(`Delete vault "${meta.name}"? This removes its locally stored pages.`)) return;
+    cancelPageOperations();
     persistStateNow();
     try{ localStorage.removeItem(vaultStorageKey(meta.id)); }catch{}
     const index=vaultRegistry.vaults.findIndex(v=>v.id===meta.id); vaultRegistry.vaults.splice(index,1);
@@ -505,7 +509,7 @@
     if (!pageById(pageId)) return null;
     if (!Array.isArray(state.openTabs)) state.openTabs=[];
     const tab={id:uid('tab'),pageId}; state.openTabs.push(tab);
-    if (activate){ state.activeTabId=tab.id; state.currentPageId=pageId; }
+    if (activate){ cancelPageOperations(); state.activeTabId=tab.id; state.currentPageId=pageId; }
     return tab;
   }
 
@@ -514,11 +518,13 @@
     if (!Array.isArray(state.openTabs)) state.openTabs=[];
     const tab=state.openTabs.find(t=>t.id===state.activeTabId);
     if (!tab) return createTab(pageId,true);
+    if(tab.pageId!==pageId || state.currentPageId!==pageId) cancelPageOperations();
     tab.pageId=pageId; state.currentPageId=pageId; return tab;
   }
 
   function activateTab(tabId){
     const tab=(state.openTabs||[]).find(t=>t.id===tabId); if(!tab||!pageById(tab.pageId))return;
+    if(state.activeTabId!==tab.id || state.currentPageId!==tab.pageId) cancelPageOperations();
     state.activeTabId=tab.id; state.currentPageId=tab.pageId; scheduleSave(); renderAll();
   }
 
@@ -527,6 +533,7 @@
     const index = state.openTabs.findIndex(t=>t.id===tabId);
     if (index < 0) return;
     const wasActive=state.activeTabId===tabId;
+    if(wasActive) cancelPageOperations();
     state.openTabs.splice(index, 1);
     if (wasActive){
       const next=state.openTabs[Math.min(index,state.openTabs.length-1)] || null;
@@ -1066,7 +1073,7 @@
       }
       if(action==='toggle-right'){ state.rightSidebarOpen=!state.rightSidebarOpen; scheduleSave(); updateWorkspaceChrome(); return; }
       if(action==='search'){ openCommandPalette(); return; }
-      if(action==='home'){ state.currentPageId='__home__'; state.activeTabId=null; scheduleSave(); renderAll(); return; }
+      if(action==='home'){ if(state.currentPageId!=='__home__') cancelPageOperations(); state.currentPageId='__home__'; state.activeTabId=null; scheduleSave(); renderAll(); return; }
       if(action==='new'){ createPage(); return; }
       if(action==='settings'){ updateSettingsText(); els.settingsModal.classList.remove('hidden'); return; }
     }
@@ -1097,7 +1104,7 @@
     if(e.target.closest('#deleteVaultBtn')){ e.preventDefault(); e.stopPropagation(); deleteVault(); return; }
     if(e.target.closest('#vaultDialogConfirm')){ e.preventDefault(); submitVaultDialog(); return; }
     if(e.target.closest('[data-vault-dialog-cancel]')){ e.preventDefault(); closeVaultDialog(); return; }
-    if(e.target.closest('[data-action="home"]')){ state.currentPageId='__home__'; state.activeTabId=null; scheduleSave(); renderAll(); return; }
+    if(e.target.closest('[data-action="home"]')){ if(state.currentPageId!=='__home__') cancelPageOperations(); state.currentPageId='__home__'; state.activeTabId=null; scheduleSave(); renderAll(); return; }
     if(e.target.closest('[data-action="search"]')){ openCommandPalette(); return; }
     if(e.target.closest('#sidebarToggle')){ state.sidebarOpen=false; scheduleSave(); updateWorkspaceChrome(); return; }
     if(e.target.closest('#sidebarOpen')){ state.sidebarOpen=true; scheduleSave(); updateWorkspaceChrome(); return; }
@@ -1491,6 +1498,7 @@
 
   function deletePage(id){
     const ids=new Set([id]); let changed=true; while(changed){ changed=false; for(const p of state.pages){ if(p.parentId&&ids.has(p.parentId)&&!ids.has(p.id)){ids.add(p.id); changed=true;} } }
+    if(ids.has(state.currentPageId)) cancelPageOperations();
     state.pages=state.pages.filter(p=>!ids.has(p.id));
     state.openTabs=(state.openTabs||[]).filter(tab=>!ids.has(tab.pageId));
     if(!(state.openTabs||[]).some(tab=>tab.id===state.activeTabId)) state.activeTabId=null;
@@ -1576,6 +1584,7 @@
   }
   function commitImageUrl(id,input){
     const b=findBlock(id); if(!b||!input)return;
+    const operationEpoch=pageOperationEpoch, pageId=state.currentPageId;
     const editor=input.closest('[data-image-url-editor]');
     const error=editor?.querySelector('[data-image-url-error]');
     const url=normalizeImageUrl(input.value);
@@ -1585,9 +1594,12 @@
     const probe=new Image();
     let finished=false;
     const done=(ok)=>{
-      if(finished)return; finished=true; clearTimeout(timer); editor?.classList.remove('loading');
+      if(finished)return; finished=true; clearTimeout(timer);
+      if(operationEpoch!==pageOperationEpoch || state.currentPageId!==pageId) return;
+      editor?.classList.remove('loading');
       if(!ok){ if(error) error.textContent='This URL could not be loaded as an image. Try a direct public .jpg, .png, .webp, .gif, or other image URL.'; input.focus(); return; }
-      b.src=url; b.alt=b.alt||imageAltFromUrl(url); activeImageLinkBlockId=null; scheduleSave(); renderBlocks(currentPage()); toast('Image embedded');
+      const current=findBlock(id); if(!current)return;
+      current.src=url; current.alt=current.alt||imageAltFromUrl(url); activeImageLinkBlockId=null; scheduleSave(); renderBlocks(currentPage()); toast('Image embedded');
     };
     probe.onload=()=>done(true);
     probe.onerror=()=>done(false);
@@ -1616,8 +1628,9 @@
   function loadImageFileIntoBlock(file,id){
     if(!file?.type?.startsWith('image/')){ toast('That file is not an image.'); return; }
     if(file.size > 2.5*1024*1024){ toast('Use an image smaller than 2.5 MB for local persistence.'); return; }
+    const operationEpoch=pageOperationEpoch, pageId=state.currentPageId;
     const reader=new FileReader();
-    reader.onload=()=>{ const b=findBlock(id); if(!b)return; b.type='image'; b.src=String(reader.result); b.alt=file.name.replace(/\.[^.]+$/,''); b.caption=b.caption||''; delete b.text; scheduleSave(); renderBlocks(currentPage()); };
+    reader.onload=()=>{ if(operationEpoch!==pageOperationEpoch || state.currentPageId!==pageId)return; const b=findBlock(id); if(!b)return; b.type='image'; b.src=String(reader.result); b.alt=file.name.replace(/\.[^.]+$/,''); b.caption=b.caption||''; delete b.text; scheduleSave(); renderBlocks(currentPage()); };
     reader.onerror=()=>toast('Could not read that image.');
     reader.readAsDataURL(file);
   }
@@ -1879,22 +1892,24 @@
     const matches=EMOJI_CATALOG.filter(item=>!q || item.emoji.includes(q) || item.name.toLowerCase().includes(q));
     host.innerHTML=matches.length?`<div class="icon-picker-grid">${matches.map(item=>`<button class="icon-picker-item ${p?.icon===item.emoji?'selected':''}" data-icon-choice="${escapeHtml(item.emoji)}" title="${escapeHtml(item.name)}">${escapeHtml(item.emoji)}</button>`).join('')}</div>`:'<div class="icon-picker-empty">No icons found</div>';
   }
-  function setPageIcon(icon){ const p=currentPage(); if(!p)return; p.icon=icon; scheduleSave(); els.pageMetaMenu.classList.add('hidden'); renderPage(); renderSidebar(); renderTabs(); renderRightSidebar(); }
+  function setPageIcon(icon,pageId=state.currentPageId){ const p=pageById(pageId); if(!p || state.currentPageId!==pageId)return; p.icon=icon; scheduleSave(); els.pageMetaMenu.classList.add('hidden'); renderPage(); renderSidebar(); renderTabs(); renderRightSidebar(); }
   function applyExternalIconUrl(value){
     const url=normalizeExternalIconUrl(value);
     if(!url){ toast('Enter a valid image URL'); return; }
+    const operationEpoch=pageOperationEpoch, pageId=state.currentPageId;
     const img=new Image(); let settled=false;
-    const finish=(ok)=>{ if(settled)return; settled=true; if(ok)setPageIcon(url); else toast('Could not load that icon'); };
+    const finish=(ok)=>{ if(settled)return; settled=true; if(operationEpoch!==pageOperationEpoch || state.currentPageId!==pageId)return; if(ok)setPageIcon(url,pageId); else toast('Could not load that icon'); };
     img.onload=()=>finish(true); img.onerror=()=>finish(false); img.src=url;
     setTimeout(()=>finish(false),7000);
   }
   function loadPageIconFile(file){
     if(!file)return;
+    const operationEpoch=pageOperationEpoch, pageId=state.currentPageId;
     const allowed=file.type.startsWith('image/') || /\.(svg|png|jpe?g|webp|gif|ico)$/i.test(file.name||'');
     if(!allowed){ toast('Choose an SVG, PNG, JPG, WEBP, GIF or ICO file'); return; }
     if(file.size>1.5*1024*1024){ toast('Icon file is too large (max 1.5 MB)'); return; }
     const reader=new FileReader();
-    reader.onload=()=>{ const data=String(reader.result||''); if(!isExternalPageIcon(data)){ toast('Unsupported icon file'); return; } setPageIcon(data); };
+    reader.onload=()=>{ if(operationEpoch!==pageOperationEpoch || state.currentPageId!==pageId)return; const data=String(reader.result||''); if(!isExternalPageIcon(data)){ toast('Unsupported icon file'); return; } setPageIcon(data,pageId); };
     reader.onerror=()=>toast('Could not read the icon file');
     reader.readAsDataURL(file);
   }
@@ -1983,6 +1998,23 @@
 
   function renderCurrentBlocksKeepFocus(){ renderBlocks(currentPage()); }
   function hideFloatingMenus(){ els.slashMenu.classList.add('hidden'); hideEmojiMenu(); els.blockMenu.classList.add('hidden'); els.pageMetaMenu?.classList.add('hidden'); activeSlashBlockId=null; }
+  function cancelPageOperations(){
+    pageOperationEpoch+=1;
+    hideFloatingMenus();
+    clearExternalIconDropState();
+    activeImageBlockId=null; activeImageLinkBlockId=null;
+    if(els.imageFileInput) els.imageFileInput.value='';
+    if(els.pageIconFileInput) els.pageIconFileInput.value='';
+    if(els.pageComments){ els.pageComments.classList.add('hidden'); els.pageComments.innerHTML=''; }
+    els.commandPalette?.classList.add('hidden');
+    els.shareModal?.classList.add('hidden');
+    els.settingsModal?.classList.add('hidden');
+    if(els.vaultDialog && !els.vaultDialog.classList.contains('hidden')) closeVaultDialog();
+    clearDragState();
+    const active=document.activeElement;
+    if(active && active!==document.body && typeof active.blur==='function') active.blur();
+    try{ window.getSelection()?.removeAllRanges(); }catch{}
+  }
   function toast(msg){ els.toast.textContent=msg; els.toast.classList.remove('hidden'); clearTimeout(toast._t); toast._t=setTimeout(()=>els.toast.classList.add('hidden'),1700); }
   function dayPart(){ const h=new Date().getHours(); return h<12?'morning':h<18?'afternoon':'evening'; }
   function countWords(page){ return flattenBlocks(page.blocks||[]).reduce((n,b)=>n+(`${b.text||''} ${b.caption||''}`.trim().split(/\s+/).filter(Boolean).length),0); }
