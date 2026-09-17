@@ -30,13 +30,14 @@ jobs:
         run: |
           node --check app.js
           python - <<'PY'
-          import re
           from pathlib import Path
           html = Path('index.html').read_text(encoding='utf-8')
-          scripts = re.findall(r'<script(?:\\s[^>]*)?>([\\s\\S]*?)</script>', html, re.I)
-          if not scripts:
+          start = html.rfind('<script>')
+          end = html.rfind('</script>')
+          if start < 0 or end < 0 or end <= start:
               raise SystemExit('No inline script found')
-          Path('/tmp/novera-inline.js').write_text(scripts[-1], encoding='utf-8')
+          js = html[start + len('<script>'):end]
+          Path('/tmp/novera-inline.js').write_text(js, encoding='utf-8')
           PY
           node --check /tmp/novera-inline.js
 
