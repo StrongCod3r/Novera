@@ -8,21 +8,21 @@
          <div class="vault-footer">
            <div class="vault-footer-label">Vault</div>
            <div class="vault-controls">
-@@ -1982,7 +1981,6 @@
-     if(e.target.closest('#themeToggle')){ cycleTheme(); return; }
-     if(e.target.closest('#exportBtn')){ exportWorkspace(); return; }
-     if(e.target.closest('#importBtn')){ els.importFile.click(); return; }
+@@ -1978,7 +1977,6 @@
+     if(e.target.closest('#addIconBtn')||e.target.closest('#pageIcon')){ showIconMenu(e.target.closest('#addIconBtn')||e.target.closest('#pageIcon')); return; }
+     if(e.target.closest('#addCommentBtn')){ openComments(); return; }
+     if(e.target.closest('#shareBtn')){ els.shareModal.classList.remove('hidden'); return; }
 -    if(e.target.closest('#settingsBtn')){ updateSettingsText(); els.settingsModal.classList.remove('hidden'); return; }
-     if(e.target.closest('#resetBtn')){ state=clone(DEFAULT_WORKSPACE); state.name=activeVaultMeta()?.name||state.name; persistStateNow(); applyTheme(); renderAll(); els.settingsModal.classList.add('hidden'); toast('Current vault reset'); return; }
- 
-     const emojiChoice=e.target.closest('[data-emoji-choice]');
+     if(e.target.matches('[data-close-modal]')|| (e.target.classList.contains('modal-backdrop'))){ e.target.closest('.modal-backdrop')?.classList.add('hidden'); return; }
+     if(e.target.closest('#publishToggle')){ e.target.closest('#publishToggle').classList.toggle('on'); toast('Public sharing updated'); return; }
+     if(e.target.closest('#themeToggle')){ cycleTheme(); return; }
 --- a/app.js
 +++ b/app.js
-@@ -1103,7 +1103,6 @@
-     if(e.target.closest('#themeToggle')){ cycleTheme(); return; }
-     if(e.target.closest('#exportBtn')){ exportWorkspace(); return; }
-     if(e.target.closest('#importBtn')){ els.importFile.click(); return; }
+@@ -1097,7 +1097,6 @@
+     if(e.target.closest('#addIconBtn')||e.target.closest('#pageIcon')){ showIconMenu(e.target.closest('#addIconBtn')||e.target.closest('#pageIcon')); return; }
+     if(e.target.closest('#addCommentBtn')){ openComments(); return; }
+     if(e.target.closest('#shareBtn')){ els.shareModal.classList.remove('hidden'); return; }
 -    if(e.target.closest('#settingsBtn')){ updateSettingsText(); els.settingsModal.classList.remove('hidden'); return; }
-     if(e.target.closest('#resetBtn')){ state=clone(DEFAULT_WORKSPACE); state.name=activeVaultMeta()?.name||state.name; persistStateNow(); applyTheme(); renderAll(); els.settingsModal.classList.add('hidden'); toast('Current vault reset'); return; }
- 
-     const emojiChoice=e.target.closest('[data-emoji-choice]');
+     if(e.target.matches('[data-close-modal]')|| (e.target.classList.contains('modal-backdrop'))){ e.target.closest('.modal-backdrop')?.classList.add('hidden'); return; }
+     if(e.target.closest('#publishToggle')){ e.target.closest('#publishToggle').classList.toggle('on'); toast('Public sharing updated'); return; }
+     if(e.target.closest('#themeToggle')){ cycleTheme(); return; }
