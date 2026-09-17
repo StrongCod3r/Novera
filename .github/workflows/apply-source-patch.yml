@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'patches/current.patch'
+      - 'patches/apply.py'
       - '.github/workflows/apply-source-patch.yml'
 
 permissions:
@@ -21,9 +21,7 @@ jobs:
 
       - name: Apply source patch
         shell: bash
-        run: |
-          git apply --check patches/current.patch
-          git apply patches/current.patch
+        run: python patches/apply.py
 
       - name: Validate JavaScript
         shell: bash
