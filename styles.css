@@ -208,31 +208,26 @@ body.dark {
 .block-row.drop-before:before, .block-row.drop-after:after { content:""; position:absolute; left:0; right:0; height:2px; background:var(--blue); z-index:4; }
 .block-row.drop-before:before { top:-2px; }
 .block-row.drop-after:after { bottom:-2px; }
-.block-gutter { position:absolute; left:-52px; top:var(--gutter-top, 3px); display:flex; opacity:0; gap:1px; }
-/* Keep the add/drag handle aligned with the first visual line of each block. */
-.block-row[data-type="h1"] { --gutter-top:28px; }
-.block-row[data-type="h2"] { --gutter-top:21px; }
-.block-row[data-type="h3"] { --gutter-top:15px; }
-.block-row[data-type="callout"] { --gutter-top:14px; }
-.block-row[data-type="code"] { --gutter-top:15px; }
-.block-row[data-type="page"] { --gutter-top:3px; }
-.block-row[data-type="image"] { --gutter-top:11px; }
-.block-row[data-type="database"] { --gutter-top:10px; }
-.block-row[data-type="table"] { --gutter-top:9px; }
-.block-row[data-type="columns"] { --gutter-top:8px; }
-.block-row[data-type="divider"] { --gutter-top:-4px; }
+.block-gutter { position:absolute; left:-52px; top:0; display:flex; opacity:0; gap:1px; }
+/* Keep the add/drag handle anchored to the beginning of every block. */
 .block-row:hover > .block-gutter { opacity:1; }
 .block-gutter button { width:23px; height:25px; border:0; background:transparent; color:var(--faint); border-radius:4px; font-size:15px; padding:0; }
+.block-gutter button[data-block-action="drag"] { width:19px; height:24px; margin-top:3px; display:grid; place-items:center; align-self:flex-start; line-height:24px; }
+.block-drag-icon { width:12px; height:22px; display:block; overflow:visible; fill:currentColor; }
+.block-drag-icon circle { r:1.45; }
 .block-gutter button:hover { background:var(--hover); color:var(--muted); }
 .block-content { flex:1; min-width:0; outline:0; white-space:pre-wrap; overflow-wrap:anywhere; padding:3px 2px; font-size:16px; line-height:1.5; border-radius:2px; }
 .block-content[data-placeholder]:focus[data-empty="true"]:before { content:attr(data-placeholder); color:var(--faint); pointer-events:none; }
+.inline-link { color:var(--blue); text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:2px; border-radius:2px; cursor:pointer; }
+.inline-link:hover { background:color-mix(in srgb,var(--blue) 10%,transparent); }
+.block-content:focus .inline-link { cursor:text; }
 .block-row[data-type="h1"] .block-content { font-size:30px; font-weight:700; line-height:1.3; margin-top:18px; }
 .block-row[data-type="h2"] .block-content { font-size:24px; font-weight:650; line-height:1.35; margin-top:14px; }
 .block-row[data-type="h3"] .block-content { font-size:20px; font-weight:650; line-height:1.4; margin-top:10px; }
 .block-row[data-type="quote"] { border-left:3px solid var(--text); padding-left:12px; }
 .block-row[data-type="callout"] { background:var(--hover); padding:13px 14px; margin:7px 0; border-radius:4px; }
 .block-row[data-type="callout"] .block-content:before { content:"💡"; margin-right:10px; }
-.block-row[data-type="code"] { background:transparent; padding:0; margin:10px 0 16px; border-radius:12px; --gutter-top:6px; }
+.block-row[data-type="code"] { background:transparent; padding:0; margin:10px 0 16px; border-radius:12px; }
 .code-block-shell { position:relative; width:100%; min-width:0; overflow:hidden; border:1px solid var(--code-border); border-radius:12px; background:var(--code-bg); box-shadow:0 1px 0 color-mix(in srgb,var(--code-text) 4%,transparent) inset; }
 .code-toolbar { position:absolute; top:5px; right:5px; z-index:4; height:29px; display:flex; align-items:stretch; justify-content:flex-start; padding:0; border:1px solid var(--code-border); border-radius:7px; background:var(--code-toolbar-bg); box-shadow:0 1px 2px rgba(0,0,0,.10); overflow:hidden; }
 .code-language-select { height:27px; min-width:66px; max-width:145px; border:0; border-right:1px solid var(--code-border); border-radius:0; background:var(--code-toolbar-bg); color:var(--code-muted); padding:0 22px 0 8px; font-size:11px; outline:none; cursor:pointer; }
@@ -278,6 +273,7 @@ body.dark {
 .code-options-sep { height:1px; background:var(--border); margin:4px 0; }
 .block-row[data-type="divider"] { min-height:17px; align-items:center; }
 .divider-line { height:1px; background:var(--border); width:100%; }
+.block-row[data-list-indent] { margin-left:var(--list-indent-offset,0px); width:calc(100% - var(--list-indent-offset,0px)); }
 .list-prefix { width:26px; flex:none; text-align:center; padding-top:4px; font-size:15px; }
 .todo-box { width:16px; height:16px; margin:7px 8px 0 2px; accent-color:var(--blue); }
 .block-row.checked .block-content { text-decoration:line-through; color:var(--muted); }
@@ -428,6 +424,7 @@ table.db-table { border-collapse:collapse; min-width:690px; width:100%; font-siz
 .block-menu-item:hover:not(:disabled) { background:var(--hover); }
 .block-menu-item:disabled { opacity:.35; cursor:not-allowed; }
 .block-menu-item.danger { color:var(--danger); }
+#blockMenu { overflow-y:auto; overscroll-behavior:contain; }
 
 .share-panel, .settings-panel { width:min(520px,92vw); padding:14px; }
 .modal-title-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
@@ -742,3 +739,7 @@ body { background:var(--ribbon); }
 .external-icon-dropzone .external-icon-upload { width:auto; min-width:104px; height:27px; margin-top:6px; padding:0 10px; }
 
 
+/* Cross-block text selection: Chromium constrains native selection to one contenteditable host, so Novera paints a continuous selection across block editors. */
+.multi-block-selection-layer { position:fixed; inset:0; z-index:14; pointer-events:none; overflow:hidden; }
+.multi-block-selection-rect { position:fixed; display:block; border-radius:2px; background:color-mix(in srgb, var(--blue) 28%, transparent); pointer-events:none; }
+body.dark .multi-block-selection-rect { background:color-mix(in srgb, var(--blue) 38%, transparent); }

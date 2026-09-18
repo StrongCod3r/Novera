@@ -87,6 +87,7 @@ The Files/Favorites sidebar keeps vertical overflow disabled unless its current 
 
 - Mermaid code language with syntax highlighting and live diagram preview. Mermaid 12 is loaded on demand from jsDelivr when a diagram preview is shown.
 - Code blocks now follow the active light/dark theme, including syntax colors, toolbar, line numbers and Mermaid preview.
+- Paste Markdown into text-like blocks and Novera converts headings, lists, tasks, quotes, callouts, dividers, fenced code, tables, links and images into native blocks.
 
 ## Source layout
 

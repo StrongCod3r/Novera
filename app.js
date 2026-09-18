@@ -192,6 +192,7 @@
   let activeImageBlockId = null;
   let activeImageLinkBlockId = null;
   let pageOperationEpoch = 0;
+  let multiBlockSelection = null;
   let saveTimer = null;
   let historyTimer = null;
   let historySuspended = false;
@@ -672,7 +673,7 @@
     if (block.type === 'database') return databaseHTML(block);
     const placeholder = "Type '/' for commands";
     const emptyState = block.text ? 'false' : 'true';
-    const gutter = `<div class="block-gutter"><button data-block-action="add" title="Add block">＋</button><button draggable="true" data-block-action="drag" title="Drag / options">⠿</button></div>`;
+    const gutter = `<div class="block-gutter"><button data-block-action="add" title="Add block">＋</button><button draggable="true" data-block-action="drag" title="Drag / options" aria-label="Drag / options"><svg class="block-drag-icon" viewBox="0 0 12 22" aria-hidden="true" focusable="false"><circle cx="3.5" cy="3.5"/><circle cx="8.5" cy="3.5"/><circle cx="3.5" cy="11"/><circle cx="8.5" cy="11"/><circle cx="3.5" cy="18.5"/><circle cx="8.5" cy="18.5"/></svg></button></div>`;
     if (block.type === 'page') return pageBlockHTML(block, gutter);
     if (block.type === 'link') return hyperlinkHTML(block, gutter);
     if (block.type === 'image') return imageHTML(block, gutter);
@@ -680,11 +681,11 @@
     if (block.type === 'table') return simpleTableHTML(block, gutter);
     if (block.type === 'columns') return columnsHTML(block, gutter);
     if (block.type === 'divider') return `<div class="block-row" data-block-id="${block.id}" data-type="divider" draggable="false">${gutter}<div class="divider-line"></div></div>`;
-    if (block.type === 'todo') return `<div class="block-row ${block.checked?'checked':''}" data-block-id="${block.id}" data-type="todo">${gutter}<input class="todo-box" type="checkbox" ${block.checked?'checked':''}><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${escapeHtml(block.text||'')}</div></div>`;
-    if (block.type === 'bullet') return `<div class="block-row" data-block-id="${block.id}" data-type="bullet">${gutter}<div class="list-prefix">•</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${escapeHtml(block.text||'')}</div></div>`;
-    if (block.type === 'number') return `<div class="block-row" data-block-id="${block.id}" data-type="number">${gutter}<div class="list-prefix">${numberForBlock(block.id, blocks)}.</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${escapeHtml(block.text||'')}</div></div>`;
-    if (block.type === 'toggle') return `<div class="block-row" data-block-id="${block.id}" data-type="toggle">${gutter}<div class="toggle-prefix" aria-label="${block.open?'Collapse':'Expand'}">${chevronSvg(block.open?'down':'right','toggle-chevron')}</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${escapeHtml(block.text||'')}</div></div>`;
-    return `<div class="block-row" data-block-id="${block.id}" data-type="${block.type}">${gutter}<div class="block-content" contenteditable="true" spellcheck="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${escapeHtml(block.text||'')}</div></div>`;
+    if (block.type === 'todo') return `<div class="block-row ${block.checked?'checked':''}" data-block-id="${block.id}" data-type="todo">${gutter}<input class="todo-box" type="checkbox" ${block.checked?'checked':''}><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>`;
+    if (block.type === 'bullet') { const indent=listIndentLevel(block), marker=['•','◦','▪'][indent%3], offset=indent*24; return `<div class="block-row" data-block-id="${block.id}" data-type="bullet" data-list-indent="${indent}" style="--list-indent-offset:${offset}px">${gutter}<div class="list-prefix">${marker}</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>`; }
+    if (block.type === 'number') { const indent=listIndentLevel(block), offset=indent*24; return `<div class="block-row" data-block-id="${block.id}" data-type="number" data-list-indent="${indent}" style="--list-indent-offset:${offset}px">${gutter}<div class="list-prefix">${numberForBlock(block.id, blocks)}.</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>`; }
+    if (block.type === 'toggle') return `<div class="block-row" data-block-id="${block.id}" data-type="toggle">${gutter}<div class="toggle-prefix" aria-label="${block.open?'Collapse':'Expand'}">${chevronSvg(block.open?'down':'right','toggle-chevron')}</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>`;
+    return `<div class="block-row" data-block-id="${block.id}" data-type="${block.type}">${gutter}<div class="block-content" contenteditable="true" spellcheck="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>`;
   }
 
   function normalizeHyperlinkUrl(value){
@@ -697,6 +698,153 @@
       if(!['http:','https:','mailto:','tel:'].includes(url.protocol)) return '';
       return url.href;
     }catch{ return ''; }
+  }
+
+  function normalizeInlineLinkRanges(links,textLength){
+    const max=Math.max(0,Number(textLength)||0), out=[];
+    const source=Array.isArray(links)?links:[];
+    for(const item of source){
+      const url=normalizeHyperlinkUrl(item?.url); if(!url) continue;
+      const start=Math.max(0,Math.min(max,Number(item?.start)||0));
+      const end=Math.max(start,Math.min(max,Number(item?.end)||0));
+      if(end<=start) continue;
+      out.push({start,end,url});
+    }
+    out.sort((a,b)=>a.start-b.start || a.end-b.end);
+    const clean=[];
+    for(const item of out){
+      const prev=clean.at(-1);
+      if(prev && item.start<prev.end) continue;
+      if(prev && item.start===prev.end && item.url===prev.url){ prev.end=item.end; continue; }
+      clean.push(item);
+    }
+    return clean;
+  }
+
+  function inlineLinksForBlock(block){
+    const text=String(block?.text||'');
+    const links=normalizeInlineLinkRanges(block?.inlineLinks,text.length);
+    if(block){ if(links.length) block.inlineLinks=links; else delete block.inlineLinks; }
+    return links;
+  }
+
+  function inlineTextHTML(block){
+    const text=String(block?.text||''), links=inlineLinksForBlock(block);
+    if(!links.length) return escapeHtml(text);
+    let html='', cursor=0;
+    for(const link of links){
+      html+=escapeHtml(text.slice(cursor,link.start));
+      const label=text.slice(link.start,link.end);
+      html+=`<a class="inline-link" data-inline-link href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer" title="Ctrl/Cmd + click to open">${escapeHtml(label)}</a>`;
+      cursor=link.end;
+    }
+    return html+escapeHtml(text.slice(cursor));
+  }
+
+  function inlineLinksFromContent(content,text){
+    const links=[];
+    for(const anchor of content?.querySelectorAll?.('a[data-inline-link]')||[]){
+      const href=normalizeHyperlinkUrl(anchor.getAttribute('href')||''); if(!href) continue;
+      try{
+        const before=document.createRange(); before.selectNodeContents(content); before.setEndBefore(anchor);
+        const start=before.toString().length, end=start+(anchor.innerText||anchor.textContent||'').length;
+        if(end>start) links.push({start,end,url:href});
+      }catch{}
+    }
+    return normalizeInlineLinkRanges(links,String(text||'').length);
+  }
+
+  function splitInlineLinksAt(block,offset){
+    const links=inlineLinksForBlock(block), point=Math.max(0,Number(offset)||0), left=[], right=[];
+    for(const link of links){
+      if(link.end<=point) left.push({...link});
+      else if(link.start>=point) right.push({start:link.start-point,end:link.end-point,url:link.url});
+      else {
+        if(link.start<point) left.push({start:link.start,end:point,url:link.url});
+        if(link.end>point) right.push({start:0,end:link.end-point,url:link.url});
+      }
+    }
+    return {left,right};
+  }
+
+  function inlineLinksAroundRange(block,start,end){
+    const links=inlineLinksForBlock(block), left=[], right=[];
+    for(const link of links){
+      if(link.end<=start) left.push({...link});
+      else if(link.start<start) left.push({start:link.start,end:start,url:link.url});
+      if(link.start>=end) right.push({start:link.start-end,end:link.end-end,url:link.url});
+      else if(link.end>end) right.push({start:0,end:link.end-end,url:link.url});
+    }
+    return {left:normalizeInlineLinkRanges(left,start),right};
+  }
+
+  function replaceBlockRangeWithInlineLink(block,start,end,label,url){
+    const original=String(block?.text||''), safeStart=Math.max(0,Math.min(original.length,start)), safeEnd=Math.max(safeStart,Math.min(original.length,end));
+    const inserted=String(label||''), delta=inserted.length-(safeEnd-safeStart), adjusted=[];
+    for(const link of inlineLinksForBlock(block)){
+      if(link.end<=safeStart) adjusted.push({...link});
+      else if(link.start>=safeEnd) adjusted.push({start:link.start+delta,end:link.end+delta,url:link.url});
+      else {
+        if(link.start<safeStart) adjusted.push({start:link.start,end:safeStart,url:link.url});
+        if(link.end>safeEnd){ const tailStart=safeStart+inserted.length; adjusted.push({start:tailStart,end:link.end+delta,url:link.url}); }
+      }
+    }
+    block.text=original.slice(0,safeStart)+inserted+original.slice(safeEnd);
+    if(inserted.length) adjusted.push({start:safeStart,end:safeStart+inserted.length,url});
+    block.inlineLinks=normalizeInlineLinkRanges(adjusted,block.text.length);
+    if(!block.inlineLinks.length) delete block.inlineLinks;
+    return safeStart+inserted.length;
+  }
+
+  function applyInlineLinkToSelection(block,start,end,url){
+    if(end<=start) return false;
+    const kept=inlineLinksForBlock(block).filter(link=>link.end<=start || link.start>=end);
+    kept.push({start,end,url});
+    block.inlineLinks=normalizeInlineLinkRanges(kept,String(block.text||'').length);
+    return true;
+  }
+
+  function normalizePastedLinkUrl(value){
+    const raw=String(value||'').trim(); if(!raw || /\s/.test(raw)) return '';
+    if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return `mailto:${raw}`;
+    if(/^(?:https?:\/\/|mailto:|tel:|\/\/)/i.test(raw)) return normalizeHyperlinkUrl(raw);
+    if(/^www\./i.test(raw) || /^localhost(?::\d+)?(?:[/?#].*)?$/i.test(raw) || /^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#].*)?$/i.test(raw)) return normalizeHyperlinkUrl(raw);
+    return '';
+  }
+
+  function clipboardLinkPayload(data){
+    const html=String(data?.getData?.('text/html')||'');
+    if(html){
+      try{
+        const doc=new DOMParser().parseFromString(html,'text/html');
+        const anchors=[...doc.body.querySelectorAll('a[href]')];
+        const visible=(doc.body.innerText||doc.body.textContent||'').trim();
+        if(anchors.length===1){
+          const anchor=anchors[0], label=(anchor.innerText||anchor.textContent||'').trim();
+          const url=normalizePastedLinkUrl(anchor.getAttribute('href')||'') || normalizeHyperlinkUrl(anchor.getAttribute('href')||'');
+          if(url && label && (!visible || visible===label)) return {url,label};
+        }
+      }catch{}
+    }
+    const plain=String(data?.getData?.('text/plain')||'').trim();
+    const url=normalizePastedLinkUrl(plain);
+    return url?{url,label:plain}:null;
+  }
+
+  function pasteLinkIntoBlock(content,payload){
+    const row=content?.closest('.block-row'), location=findBlockLocation(row?.dataset.blockId), page=currentPage();
+    if(!location || !page || !isTextLikeBlock(location.block) || !payload?.url) return false;
+    const block=location.block, {start,end}=selectionOffsetsWithin(content);
+    let caret=end;
+    if(end>start){
+      if(!applyInlineLinkToSelection(block,start,end,payload.url)) return false;
+      caret=end;
+    }else{
+      caret=replaceBlockRangeWithInlineLink(block,start,end,payload.label||payload.url,payload.url);
+    }
+    scheduleSave(); hideFloatingMenus(); renderBlocks(page); focusBlock(block.id,caret);
+    toast(end>start?'Linked selected text':'Link pasted');
+    return true;
   }
 
   function hyperlinkHTML(block,gutter){
@@ -785,6 +933,8 @@
       if(!block.id) block.id=uid('b');
       if(block.type==='table') normalizeSimpleTableBlock(block);
       if(block.type==='link'){ if(typeof block.text!=='string') block.text=''; if(typeof block.url!=='string') block.url=''; }
+      if(['text','h1','h2','h3','bullet','number','todo','toggle','quote','callout'].includes(block.type)) inlineLinksForBlock(block);
+      if(isListBlock(block)) setListIndentLevel(block,listIndentLevel(block)); else if('indent' in block) delete block.indent;
       if(block.type==='columns') normalizeColumnsBlock(block);
     }
     return blocks.filter(Boolean);
@@ -973,11 +1123,15 @@
     if(navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(()=>toast('Code copied')).catch(fallback); else fallback();
   }
 
+  function blockDeleteMenuItem(id){
+    return `<button class="block-menu-item danger" data-block-menu-action="delete" data-block-id="${id}">Delete</button>`;
+  }
+
   function showCodeOptions(row,id){
     const b=findBlock(id); if(!b)return; const r=row.getBoundingClientRect(), menuWidth=210, menuHeight=210;
     els.blockMenu.style.left=`${Math.max(8,Math.min(r.right-menuWidth,window.innerWidth-menuWidth-8))}px`; els.blockMenu.style.top=`${Math.max(8,Math.min(r.top+36,window.innerHeight-menuHeight-8))}px`; els.blockMenu.style.width=`${menuWidth}px`;
     const mermaidOption=b.language==='mermaid'?`<button class="block-menu-item" data-code-menu-action="mermaid-preview" data-block-id="${id}">${b.mermaidPreview!==false?'✓ ':''}Diagram preview</button>`:'';
-    els.blockMenu.innerHTML=`<button class="block-menu-item" data-code-menu-action="copy" data-block-id="${id}">Copy code</button><button class="block-menu-item" data-code-menu-action="wrap" data-block-id="${id}">${b.codeWrap?'✓ ':''}Wrap lines</button><button class="block-menu-item" data-code-menu-action="lines" data-block-id="${id}">${b.codeLineNumbers?'✓ ':''}Line numbers</button>${mermaidOption}<div class="code-options-sep"></div><button class="block-menu-item" data-block-menu-action="turn-text" data-block-id="${id}">Turn into text</button><button class="block-menu-item danger" data-block-menu-action="delete" data-block-id="${id}">Delete</button>`;
+    els.blockMenu.innerHTML=`<button class="block-menu-item" data-code-menu-action="copy" data-block-id="${id}">Copy code</button><button class="block-menu-item" data-code-menu-action="wrap" data-block-id="${id}">${b.codeWrap?'✓ ':''}Wrap lines</button><button class="block-menu-item" data-code-menu-action="lines" data-block-id="${id}">${b.codeLineNumbers?'✓ ':''}Line numbers</button>${mermaidOption}<div class="code-options-sep"></div><button class="block-menu-item" data-block-menu-action="turn-text" data-block-id="${id}">Turn into text</button>${blockDeleteMenuItem(id)}`;
     els.blockMenu.classList.remove('hidden');
   }
 
@@ -1017,7 +1171,7 @@
     const cols = block.columns || ['Name','Status'];
     const rows = block.rows || [];
     return `<div class="block-row database-block" data-block-id="${block.id}" data-type="database">
-      <div class="block-gutter"><button data-block-action="add">＋</button><button draggable="true" data-block-action="drag">⠿</button></div>
+      <div class="block-gutter"><button data-block-action="add">＋</button><button draggable="true" data-block-action="drag" title="Drag / options" aria-label="Drag / options"><svg class="block-drag-icon" viewBox="0 0 12 22" aria-hidden="true" focusable="false"><circle cx="3.5" cy="3.5"/><circle cx="8.5" cy="3.5"/><circle cx="3.5" cy="11"/><circle cx="8.5" cy="11"/><circle cx="3.5" cy="18.5"/><circle cx="8.5" cy="18.5"/></svg></button></div>
       <div style="width:100%">
         <div class="database-title"><strong contenteditable="true" data-db-title>${escapeHtml(block.title||'Untitled database')}</strong><button class="ghost-btn" data-db-add-col>＋ Property</button></div>
         <div class="db-table-wrap"><table class="db-table"><thead><tr>${cols.map((c,ci)=>`<th contenteditable="true" data-db-col="${ci}">${escapeHtml(c)}</th>`).join('')}</tr></thead>
@@ -1027,10 +1181,50 @@
     </div>`;
   }
 
+  function isListBlock(block){ return !!block && (block.type==='bullet' || block.type==='number'); }
+  function listIndentLevel(block){ return isListBlock(block)?Math.max(0,Math.min(8,Math.floor(Number(block.indent)||0))):0; }
+  function setListIndentLevel(block,level){
+    if(!isListBlock(block)) return;
+    const next=Math.max(0,Math.min(8,Math.floor(Number(level)||0)));
+    if(next) block.indent=next; else delete block.indent;
+  }
+  function listSubtreeEnd(blocks,index){
+    const root=blocks[index], base=listIndentLevel(root); let end=index+1;
+    while(end<blocks.length && isListBlock(blocks[end]) && listIndentLevel(blocks[end])>base) end++;
+    return end;
+  }
+  function changeListIndent(blocks,index,direction){
+    const block=blocks[index]; if(!isListBlock(block)) return false;
+    const current=listIndentLevel(block); let target=current;
+    if(direction>0){
+      if(index<=0 || !isListBlock(blocks[index-1])) return false;
+      const maxAllowed=Math.min(8,listIndentLevel(blocks[index-1])+1);
+      target=Math.min(current+1,maxAllowed);
+      if(target<=current) return false;
+    }else{
+      if(current<=0) return false;
+      target=current-1;
+    }
+    const delta=target-current, end=listSubtreeEnd(blocks,index);
+    for(let i=index;i<end;i++) setListIndentLevel(blocks[i],listIndentLevel(blocks[i])+delta);
+    return true;
+  }
+
   function numberForBlock(id, blocks){
-    let n=0;
-    for (const b of blocks){ if (b.type==='number') n++; else n=0; if (b.id===id) return n; }
-    return 1;
+    const index=blocks.findIndex(block=>block?.id===id);
+    if(index<0) return 1;
+    const target=blocks[index], indent=listIndentLevel(target);
+    let n=1;
+    for(let i=index-1;i>=0;i--){
+      const block=blocks[i];
+      if(!isListBlock(block)) break;
+      const level=listIndentLevel(block);
+      if(level<indent) break;
+      if(level>indent) continue;
+      if(block.type!=='number') break;
+      n++;
+    }
+    return n;
   }
 
   function bindEvents(){
@@ -1046,10 +1240,12 @@
     document.addEventListener('dragleave', e=>{ const zone=e.target.closest?.('[data-external-icon-dropzone]'); if(zone && (!e.relatedTarget || !zone.contains(e.relatedTarget))) zone.classList.remove('drag-over'); });
     document.addEventListener('drop', onDrop);
     document.addEventListener('paste', onPaste);
+    document.addEventListener('copy', onCopy);
+    document.addEventListener('cut', onCut);
     document.addEventListener('beforeinput', onBeforeInput);
     document.addEventListener('dragend', clearDragState);
-    document.addEventListener('scroll', e=>{ if(e.target?.matches?.('[data-code-editor]')) syncCodeScroll(e.target); }, true);
-    window.addEventListener('resize', ()=>{ hideFloatingMenus(); updateSidebarOverflow(); });
+    document.addEventListener('scroll', e=>{ if(e.target?.matches?.('[data-code-editor]')) syncCodeScroll(e.target); if(multiBlockSelection?.active) renderMultiBlockSelection(); }, true);
+    window.addEventListener('resize', ()=>{ hideFloatingMenus(); updateSidebarOverflow(); if(multiBlockSelection?.active) renderMultiBlockSelection(); });
   }
 
   function onPaneResizeStart(e){
@@ -1142,6 +1338,9 @@
     const pageBlockLink=e.target.closest('[data-page-block-open]');
     if(pageBlockLink){ openPage(pageBlockLink.dataset.pageBlockOpen); return; }
 
+    const inlineLink=e.target.closest('a[data-inline-link]');
+    if(inlineLink && (e.ctrlKey||e.metaKey)){ e.preventDefault(); window.open(inlineLink.href,'_blank','noopener,noreferrer'); return; }
+
     const blockRow=e.target.closest('.block-row');
     if(blockRow){
       const id=blockRow.dataset.blockId;
@@ -1176,8 +1375,264 @@
   }
 
   function onMouseDown(e){
+    if(e.button===0){
+      const content=e.target.closest?.('.block-content[contenteditable="true"]');
+      if(content && els.blockEditor?.contains(content)) beginMultiBlockSelection(e,content);
+      else clearMultiBlockSelection();
+    }
     if(e.button!==1) return;
     if(e.target.closest('.editor-tab[data-tab-id], .page-tree-row [data-action="open-page"], [data-crumb-id], [data-home-page], [data-page-block-open]')) e.preventDefault();
+  }
+
+  function selectableBlockContents(){
+    return Array.from(els.blockEditor?.querySelectorAll?.('.block-content[contenteditable="true"]')||[]).filter(el=>el.isConnected && el.offsetParent!==null);
+  }
+
+  function contentBoundaryPoint(content,atEnd=false){
+    if(!content) return null;
+    if(!atEnd) return {node:content,offset:0,content};
+    return {node:content,offset:content.childNodes.length,content};
+  }
+
+  function caretPointInContent(content,x,y){
+    if(!content) return null;
+    let node=null,offset=0;
+    try{
+      if(document.caretPositionFromPoint){ const p=document.caretPositionFromPoint(x,y); node=p?.offsetNode||null; offset=p?.offset||0; }
+      else if(document.caretRangeFromPoint){ const r=document.caretRangeFromPoint(x,y); node=r?.startContainer||null; offset=r?.startOffset||0; }
+    }catch{}
+    if(node && (node===content || content.contains(node))) return {node,offset,content};
+    const rect=content.getBoundingClientRect();
+    const atEnd=y>rect.bottom || (y>=rect.top && y<=rect.bottom && x>rect.left+rect.width*.5);
+    return contentBoundaryPoint(content,atEnd);
+  }
+
+  function nearestSelectableContent(x,y){
+    const direct=document.elementFromPoint(x,y)?.closest?.('.block-content[contenteditable="true"]');
+    if(direct && els.blockEditor?.contains(direct)) return direct;
+    const contents=selectableBlockContents();
+    let best=null,bestDistance=Infinity;
+    for(const content of contents){
+      const r=content.getBoundingClientRect();
+      const distance=y<r.top?r.top-y:y>r.bottom?y-r.bottom:0;
+      if(distance<bestDistance){ best=content; bestDistance=distance; }
+    }
+    return bestDistance<=32?best:null;
+  }
+
+  function pointOrder(a,b,contents=selectableBlockContents()){
+    const ai=contents.indexOf(a?.content), bi=contents.indexOf(b?.content);
+    if(ai!==bi) return ai-bi;
+    if(ai<0) return 0;
+    try{
+      const ar=document.createRange(), br=document.createRange();
+      ar.setStart(a.node,a.offset); ar.collapse(true); br.setStart(b.node,b.offset); br.collapse(true);
+      return ar.compareBoundaryPoints(Range.START_TO_START,br);
+    }catch{return 0;}
+  }
+
+  function orderedMultiSelectionPoints(selection=multiBlockSelection){
+    if(!selection?.anchor || !selection?.focus) return null;
+    const contents=selectableBlockContents();
+    const order=pointOrder(selection.anchor,selection.focus,contents);
+    return order<=0?{start:selection.anchor,end:selection.focus,contents}:{start:selection.focus,end:selection.anchor,contents};
+  }
+
+  function multiSelectionRanges(selection=multiBlockSelection){
+    const ordered=orderedMultiSelectionPoints(selection); if(!ordered) return [];
+    const {start,end,contents}=ordered, startIndex=contents.indexOf(start.content), endIndex=contents.indexOf(end.content);
+    if(startIndex<0 || endIndex<startIndex) return [];
+    const ranges=[];
+    for(let i=startIndex;i<=endIndex;i++){
+      const content=contents[i], range=document.createRange();
+      try{
+        if(i===startIndex) range.setStart(start.node,start.offset); else range.setStart(content,0);
+        if(i===endIndex) range.setEnd(end.node,end.offset); else range.setEnd(content,content.childNodes.length);
+        if(!range.collapsed) ranges.push({content,range});
+      }catch{}
+    }
+    return ranges;
+  }
+
+  function multiSelectionLayer(){
+    let layer=document.getElementById('multiBlockSelectionLayer');
+    if(!layer){ layer=document.createElement('div'); layer.id='multiBlockSelectionLayer'; layer.className='multi-block-selection-layer'; document.body.appendChild(layer); }
+    return layer;
+  }
+
+  function renderMultiBlockSelection(){
+    const layer=multiSelectionLayer(); layer.innerHTML='';
+    if(!multiBlockSelection?.active) return;
+    for(const {range} of multiSelectionRanges()){
+      for(const rect of range.getClientRects()){
+        if(rect.width<.5 || rect.height<.5) continue;
+        const mark=document.createElement('span'); mark.className='multi-block-selection-rect';
+        mark.style.left=`${rect.left}px`; mark.style.top=`${rect.top}px`; mark.style.width=`${rect.width}px`; mark.style.height=`${rect.height}px`;
+        layer.appendChild(mark);
+      }
+    }
+  }
+
+  function clearMultiBlockSelection(){
+    if(multiBlockSelection?.dragging){ window.removeEventListener('mousemove',onMultiBlockSelectionMove,true); window.removeEventListener('mouseup',onMultiBlockSelectionEnd,true); }
+    multiBlockSelection=null;
+    const layer=document.getElementById('multiBlockSelectionLayer'); if(layer) layer.innerHTML='';
+  }
+
+  function beginMultiBlockSelection(e,content){
+    clearMultiBlockSelection();
+    const anchor=caretPointInContent(content,e.clientX,e.clientY); if(!anchor) return;
+    multiBlockSelection={anchor,focus:anchor,active:false,dragging:true,startX:e.clientX,startY:e.clientY};
+    window.addEventListener('mousemove',onMultiBlockSelectionMove,true);
+    window.addEventListener('mouseup',onMultiBlockSelectionEnd,true);
+  }
+
+  function onMultiBlockSelectionMove(e){
+    const selection=multiBlockSelection; if(!selection?.dragging) return;
+    if(!(e.buttons&1)){ onMultiBlockSelectionEnd(e); return; }
+    const content=nearestSelectableContent(e.clientX,e.clientY); if(!content) return;
+    const focus=caretPointInContent(content,e.clientX,e.clientY); if(!focus) return;
+    const crossedBlock=content!==selection.anchor.content;
+    const moved=Math.hypot(e.clientX-selection.startX,e.clientY-selection.startY)>4;
+    if(!selection.active && !(crossedBlock&&moved)) return;
+    selection.active=true; selection.focus=focus;
+    e.preventDefault();
+    try{ window.getSelection()?.removeAllRanges(); }catch{}
+    renderMultiBlockSelection();
+  }
+
+  function onMultiBlockSelectionEnd(e){
+    const selection=multiBlockSelection; if(!selection) return;
+    window.removeEventListener('mousemove',onMultiBlockSelectionMove,true); window.removeEventListener('mouseup',onMultiBlockSelectionEnd,true);
+    selection.dragging=false;
+    if(!selection.active){ multiBlockSelection=null; return; }
+    const content=nearestSelectableContent(e.clientX,e.clientY);
+    if(content){ const focus=caretPointInContent(content,e.clientX,e.clientY); if(focus) selection.focus=focus; }
+    e.preventDefault?.();
+    try{ window.getSelection()?.removeAllRanges(); }catch{}
+    renderMultiBlockSelection();
+  }
+
+  function multiSelectionSegments(){
+    const segments=[];
+    if(!multiBlockSelection?.active) return segments;
+    for(const {content,range} of multiSelectionRanges()){
+      const row=content.closest('.block-row'), location=findBlockLocation(row?.dataset.blockId), block=location?.block;
+      if(!block || !isTextLikeBlock(block)) continue;
+      const start=localTextOffset(content,range.startContainer,range.startOffset);
+      const end=localTextOffset(content,range.endContainer,range.endOffset);
+      if(end<=start) continue;
+      segments.push({content,range,row,location,block,start,end});
+    }
+    return segments;
+  }
+
+  function markdownEscapeLinkLabel(value){ return String(value||'').replace(/\\/g,'\\\\').replace(/\]/g,'\\]'); }
+  function markdownEscapeLinkUrl(value){ return String(value||'').replace(/\\/g,'\\\\').replace(/[()]/g,m=>`\\${m}`); }
+
+  function markdownInlineSlice(block,start,end){
+    const text=String(block?.text||''), safeStart=Math.max(0,Math.min(text.length,start)), safeEnd=Math.max(safeStart,Math.min(text.length,end));
+    const links=inlineLinksForBlock(block); if(!links.length) return text.slice(safeStart,safeEnd);
+    let out='',cursor=safeStart;
+    for(const link of links){
+      const from=Math.max(safeStart,link.start), to=Math.min(safeEnd,link.end);
+      if(to<=from) continue;
+      if(from>cursor) out+=text.slice(cursor,from);
+      out+=`[${markdownEscapeLinkLabel(text.slice(from,to))}](${markdownEscapeLinkUrl(link.url)})`;
+      cursor=to;
+    }
+    return out+text.slice(cursor,safeEnd);
+  }
+
+  function markdownPrefixForBlock(block,location){
+    if(!block) return '';
+    const indent='  '.repeat(listIndentLevel(block));
+    if(block.type==='bullet') return `${indent}- `;
+    if(block.type==='number') return `${indent}${numberForBlock(block.id,location?.blocks||[])}. `;
+    if(block.type==='todo') return `- [${block.checked?'x':' '}] `;
+    if(block.type==='h1') return '# ';
+    if(block.type==='h2') return '## ';
+    if(block.type==='h3') return '### ';
+    if(block.type==='quote' || block.type==='callout') return '> ';
+    return '';
+  }
+
+  function selectedMultiBlockMarkdown(){
+    const segments=multiSelectionSegments(); if(!segments.length) return '';
+    return segments.map(({block,location,start,end})=>{
+      const prefix=start===0?markdownPrefixForBlock(block,location):'';
+      return prefix+markdownInlineSlice(block,start,end);
+    }).join('\n');
+  }
+
+  function copyMultiBlockSelectionToClipboard(e){
+    const markdown=selectedMultiBlockMarkdown(); if(!markdown) return false;
+    e?.preventDefault?.();
+    e?.clipboardData?.setData?.('text/plain',markdown);
+    e?.clipboardData?.setData?.('text/markdown',markdown);
+    return true;
+  }
+
+  function onCopy(e){ copyMultiBlockSelectionToClipboard(e); }
+  function onCut(e){
+    if(!multiBlockSelection?.active) return;
+    if(copyMultiBlockSelectionToClipboard(e)) deleteMultiBlockSelection();
+  }
+
+  function localTextOffset(content,node,offset){
+    try{ const range=document.createRange(); range.selectNodeContents(content); range.setEnd(node,offset); return range.toString().length; }catch{return 0;}
+  }
+
+  function deleteBlockTextRange(block,start,end){
+    const original=String(block?.text||''), safeStart=Math.max(0,Math.min(original.length,start)), safeEnd=Math.max(safeStart,Math.min(original.length,end));
+    if(safeEnd<=safeStart) return;
+    const links=inlineLinksAroundRange(block,safeStart,safeEnd), rightShift=safeStart;
+    block.text=original.slice(0,safeStart)+original.slice(safeEnd);
+    const merged=[...links.left,...links.right.map(link=>({start:link.start+rightShift,end:link.end+rightShift,url:link.url}))];
+    block.inlineLinks=normalizeInlineLinkRanges(merged,block.text.length); if(!block.inlineLinks.length) delete block.inlineLinks;
+  }
+
+  function normalizeListIndentation(blocks){
+    if(!Array.isArray(blocks)) return;
+    let previous=null;
+    for(const block of blocks){
+      if(!isListBlock(block)){ previous=block; continue; }
+      let level=listIndentLevel(block);
+      if(!isListBlock(previous)) level=0;
+      else level=Math.min(level,listIndentLevel(previous)+1);
+      setListIndentLevel(block,level);
+      previous=block;
+    }
+  }
+
+  function deleteMultiBlockSelection(){
+    const segments=multiSelectionSegments(); if(!segments.length){ clearMultiBlockSelection(); return false; }
+    const first=segments[0], firstContainer=first.location.blocks, firstIndex=first.location.index;
+    const affectedLists=new Set();
+    let focusId=null,focusOffset=0;
+
+    for(let i=segments.length-1;i>=0;i--){
+      const {block,start,end}=segments[i], location=findBlockLocation(block.id); if(!location) continue;
+      const textLength=String(block.text||'').length, fullBlock=start===0 && end>=textLength;
+      if(fullBlock){
+        affectedLists.add(location.blocks);
+        location.blocks.splice(location.index,1);
+      }else{
+        deleteBlockTextRange(block,start,end);
+        if(i===0){ focusId=block.id; focusOffset=start; }
+      }
+    }
+
+    for(const blocks of affectedLists){ normalizeListIndentation(blocks); ensureBlockList(blocks); }
+    clearMultiBlockSelection();
+    scheduleSave(); renderBlocks(currentPage());
+
+    if(focusId && findBlock(focusId)){ focusBlock(focusId,focusOffset); return true; }
+    if(Array.isArray(firstContainer) && firstContainer.length){
+      const target=firstContainer[Math.min(firstIndex,firstContainer.length-1)] || firstContainer.at(-1);
+      if(target?.id) focusBlock(target.id,0);
+    }
+    return true;
   }
 
   function onAuxClick(e){
@@ -1205,7 +1660,7 @@
     const content=e.target.closest('.block-content');
     if(content){
       const row=content.closest('.block-row'); const b=findBlock(row.dataset.blockId); if(!b) return;
-      b.text=content.innerText.replace(/\n$/, ''); content.dataset.empty=b.text.length?'false':'true'; scheduleSave('merge'); if(['h1','h2','h3'].includes(b.type)) renderRightSidebar();
+      b.text=content.innerText.replace(/\n$/, ''); b.inlineLinks=inlineLinksFromContent(content,b.text); if(!b.inlineLinks.length) delete b.inlineLinks; content.dataset.empty=b.text.length?'false':'true'; scheduleSave('merge'); if(['h1','h2','h3'].includes(b.type)) renderRightSidebar();
       if(b.text.startsWith('/') && !b.text.includes('\n')){ showSlashMenu(row,b); hideEmojiMenu(); }
       else { if(activeSlashBlockId===b.id) hideSlashMenu(); updateEmojiMenu(content,b); }
       els.emptyHint.style.display='none';
@@ -1253,6 +1708,10 @@
 
   function onKeyDown(e){
     const mod=e.ctrlKey||e.metaKey;
+    if(multiBlockSelection?.active){
+      if(e.key==='Escape'){ e.preventDefault(); clearMultiBlockSelection(); return; }
+      if(e.key==='Backspace'||e.key==='Delete'){ e.preventDefault(); deleteMultiBlockSelection(); return; }
+    }
     if(e.target.matches?.('[data-external-icon-dropzone]') && (e.key==='Enter' || e.key===' ')){
       e.preventDefault(); els.pageIconFileInput?.click(); return;
     }
@@ -1340,15 +1799,57 @@
     const row=content.closest('.block-row'), id=row.dataset.blockId, location=findBlockLocation(id), b=location?.block, page=currentPage();
     if(!location||!b)return;
     const blocks=location.blocks, index=location.index;
+    if(e.key===' ' && !e.ctrlKey && !e.metaKey && !e.altKey && b.type==='text'){
+      const marker=content.innerText.replace(/\n$/, '');
+      const selection=window.getSelection();
+      const caret=getCaretOffset(content);
+      const selectionCollapsed=!selection?.rangeCount || selection.isCollapsed;
+      let shortcutType=null;
+      if(selectionCollapsed && caret===marker.length){
+        if(marker==='*' || marker==='-' || marker==='+') shortcutType='bullet';
+        else if(marker==='1.' || marker==='1)') shortcutType='number';
+      }
+      if(shortcutType){
+        e.preventDefault();
+        b.type=shortcutType;
+        b.text='';
+        delete b.indent;
+        hideFloatingMenus();
+        scheduleSave();
+        renderBlocks(page);
+        focusBlock(b.id,0);
+        return;
+      }
+    }
+    if(e.key==='Tab' && isListBlock(b)){
+      e.preventDefault();
+      const caret=getCaretOffset(content);
+      if(changeListIndent(blocks,index,e.shiftKey?-1:1)){
+        hideFloatingMenus();
+        scheduleSave();
+        renderBlocks(page);
+        focusBlock(b.id,caret);
+      }
+      return;
+    }
     if(e.key==='Enter' && !e.shiftKey){
       e.preventDefault();
       if(b.type==='database') return;
       const sel=window.getSelection(); const caret=getCaretOffset(content);
-      const text=b.text||''; const left=text.slice(0,caret), right=text.slice(caret);
-      b.text=left;
+      const text=b.text||'', linkSplit=splitInlineLinksAt(b,caret); const left=text.slice(0,caret), right=text.slice(caret);
+      b.text=left; b.inlineLinks=normalizeInlineLinkRanges(linkSplit.left,left.length); if(!b.inlineLinks.length) delete b.inlineLinks;
       const nextType=['bullet','number','todo','toggle'].includes(b.type) ? b.type : 'text';
-      const nb={id:uid('b'),type:nextType,text:right}; if(nextType==='todo') nb.checked=false;
+      const nb={id:uid('b'),type:nextType,text:right}; if(isListBlock(nb)) setListIndentLevel(nb,listIndentLevel(b)); const nextLinks=normalizeInlineLinkRanges(linkSplit.right,right.length); if(nextLinks.length) nb.inlineLinks=nextLinks; if(nextType==='todo') nb.checked=false;
       blocks.splice(index+1,0,nb); scheduleSave(); renderBlocks(page); focusBlock(nb.id,0); return;
+    }
+    if(e.key==='Backspace' && (b.text||'')==='' && isListBlock(b)){
+      e.preventDefault();
+      if(listIndentLevel(b)>0) changeListIndent(blocks,index,-1);
+      else { b.type='text'; delete b.indent; }
+      scheduleSave();
+      renderBlocks(page);
+      focusBlock(b.id,0);
+      return;
     }
     if(e.key==='Backspace' && (b.text||'')==='' && index>0){
       e.preventDefault(); const prev=blocks[index-1]; blocks.splice(index,1); scheduleSave(); renderBlocks(page);
@@ -1357,12 +1858,12 @@
     if(e.key==='Backspace' && getCaretOffset(content)===0 && index>0){
       const prev=blocks[index-1];
       if(isTextLikeBlock(prev)){
-        e.preventDefault(); const pos=(prev.text||'').length; prev.text=(prev.text||'')+(b.text||''); blocks.splice(index,1); scheduleSave(); renderBlocks(page); focusBlock(prev.id,pos);
+        e.preventDefault(); const pos=(prev.text||'').length, mergedLinks=[...inlineLinksForBlock(prev),...inlineLinksForBlock(b).map(link=>({start:link.start+pos,end:link.end+pos,url:link.url}))]; prev.text=(prev.text||'')+(b.text||''); prev.inlineLinks=normalizeInlineLinkRanges(mergedLinks,prev.text.length); if(!prev.inlineLinks.length) delete prev.inlineLinks; blocks.splice(index,1); scheduleSave(); renderBlocks(page); focusBlock(prev.id,pos);
       }
     }
     if(mod && e.shiftKey){
       const map={'1':'h1','2':'h2','3':'h3','7':'number','8':'bullet','9':'todo'};
-      if(map[e.key]){ e.preventDefault(); b.type=map[e.key]; scheduleSave(); renderBlocks(page); focusBlock(b.id,(b.text||'').length); }
+      if(map[e.key]){ e.preventDefault(); const wasList=isListBlock(b); b.type=map[e.key]; if(!isListBlock(b) || !wasList) delete b.indent; scheduleSave(); renderBlocks(page); focusBlock(b.id,(b.text||'').length); }
     }
   }
 
@@ -1635,6 +2136,196 @@
     reader.onerror=()=>toast('Could not read that image.');
     reader.readAsDataURL(file);
   }
+  function normalizeMarkdownCodeLanguage(value){
+    const raw=String(value||'').trim().toLowerCase().replace(/^\{\.?|\}$/g,'');
+    const aliases={
+      js:'javascript',jsx:'javascript',node:'javascript',ts:'typescript',tsx:'typescript',
+      sh:'bash',shell:'bash',zsh:'bash',powershell:'bash',ps1:'bash',
+      py:'python',cs:'csharp','c#':'csharp',dotnet:'csharp',
+      c:'cpp','c++':'cpp',cc:'cpp',h:'cpp',hpp:'cpp',
+      rs:'rust',golang:'go',html5:'html',htm:'html',
+      yml:'yaml',md:'markdown',mdown:'markdown',mmd:'mermaid',
+      txt:'plain',text:'plain',plaintext:'plain'
+    };
+    const language=aliases[raw]||raw||'plain';
+    return CODE_LANGUAGES.some(([id])=>id===language)?language:'plain';
+  }
+
+  function markdownInlineText(value){
+    let text=String(value||'');
+    text=text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,(_,alt,url)=>alt?`${alt} (${url})`:url);
+    text=text.replace(/\[([^\]]+)\]\(([^)]+)\)/g,(_,label,url)=>`${label} (${url})`);
+    text=text.replace(/<((?:https?:\/\/|mailto:)[^>]+)>/gi,'$1');
+    text=text.replace(/(`{1,2})(.*?)\1/g,'$2');
+    text=text.replace(/(\*\*|__)(.*?)\1/g,'$2');
+    text=text.replace(/~~(.*?)~~/g,'$1');
+    text=text.replace(/(^|[^*])\*([^*\n]+)\*/g,'$1$2');
+    text=text.replace(/(^|[^_])_([^_\n]+)_/g,'$1$2');
+    text=text.replace(/\\([\\`*_[\]{}()#+\-.!>])/g,'$1');
+    return text.trim();
+  }
+
+  function splitMarkdownTableRow(line){
+    let source=String(line||'').trim();
+    if(source.startsWith('|')) source=source.slice(1);
+    if(source.endsWith('|') && !source.endsWith('\\|')) source=source.slice(0,-1);
+    const cells=[]; let current=''; let escaped=false;
+    for(const ch of source){
+      if(escaped){ current+=ch; escaped=false; continue; }
+      if(ch==='\\'){ escaped=true; current+=ch; continue; }
+      if(ch==='|'){ cells.push(markdownInlineText(current.trim())); current=''; continue; }
+      current+=ch;
+    }
+    cells.push(markdownInlineText(current.trim()));
+    return cells;
+  }
+
+  function isMarkdownTableSeparator(line){
+    const cells=splitMarkdownTableRow(line);
+    return cells.length>1 && cells.every(cell=>/^:?-{3,}:?$/.test(cell.replace(/\s+/g,'')));
+  }
+
+  function looksLikeMarkdown(text){
+    const source=String(text||'').replace(/\r\n?/g,'\n');
+    if(!source.trim()) return false;
+    return /(^|\n)\s{0,3}(#{1,6})\s+\S/.test(source)
+      || /(^|\n)\s{0,3}(```|~~~)/.test(source)
+      || /(^|\n)\s{0,3}[-+*]\s+(?:\[[ xX]\]\s+)?\S/.test(source)
+      || /(^|\n)\s{0,3}\d+[.)]\s+\S/.test(source)
+      || /(^|\n)\s{0,3}>\s?\S/.test(source)
+      || /(^|\n)\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*(?:\n|$)/.test(source)
+      || /!\[[^\]]*\]\([^)]+\)/.test(source)
+      || /^\s*\[[^\]]+\]\([^)]+\)\s*$/m.test(source)
+      || /(^|\n)\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}:?\s*\|/.test(source);
+  }
+
+  function parseMarkdownBlocks(markdown){
+    const lines=String(markdown||'').replace(/\r\n?/g,'\n').split('\n');
+    const blocks=[];
+    const pushText=(type,text,extra={})=>{
+      const cleaned=markdownInlineText(text);
+      if(!cleaned && type!=='text') return;
+      blocks.push({id:uid('b'),type,text:cleaned,...extra});
+    };
+    let i=0;
+    while(i<lines.length){
+      const line=lines[i];
+      const trimmed=line.trim();
+      if(!trimmed){ i++; continue; }
+
+      const fence=line.match(/^\s{0,3}(```|~~~)\s*([^\s`]*)\s*$/);
+      if(fence){
+        const marker=fence[1], language=normalizeMarkdownCodeLanguage(fence[2]);
+        const body=[]; i++;
+        while(i<lines.length && !new RegExp(`^\\s{0,3}${marker[0]}{3,}\\s*$`).test(lines[i])) body.push(lines[i++]);
+        if(i<lines.length) i++;
+        blocks.push({id:uid('b'),type:'code',text:body.join('\n'),language,codeWrap:false,codeLineNumbers:false,mermaidPreview:language==='mermaid'});
+        continue;
+      }
+
+      if(i+1<lines.length && line.includes('|') && isMarkdownTableSeparator(lines[i+1])){
+        const rows=[splitMarkdownTableRow(line)]; i+=2;
+        while(i<lines.length && lines[i].trim() && lines[i].includes('|')) rows.push(splitMarkdownTableRow(lines[i++]));
+        const columns=Math.max(1,...rows.map(row=>row.length));
+        const normalized=rows.map(row=>{ const cells=row.slice(); while(cells.length<columns)cells.push(''); return cells.slice(0,columns); });
+        blocks.push({id:uid('b'),type:'table',tableRows:normalized,tableHeaderRow:true,tableHeaderColumn:false});
+        continue;
+      }
+
+      if(/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)){
+        blocks.push({id:uid('b'),type:'divider'}); i++; continue;
+      }
+
+      const heading=line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+      if(heading){
+        const level=Math.min(3,heading[1].length);
+        pushText(`h${level}`,heading[2]); i++; continue;
+      }
+
+      const todo=line.match(/^\s*[-+*]\s+\[([ xX])\]\s+(.*)$/);
+      if(todo){ pushText('todo',todo[2],{checked:todo[1].toLowerCase()==='x'}); i++; continue; }
+
+      const bullet=line.match(/^(\s*)[-+*]\s+(.*)$/);
+      if(bullet){ const indent=Math.min(8,Math.floor(bullet[1].replace(/\t/g,'  ').length/2)); pushText('bullet',bullet[2],indent?{indent}:{}); i++; continue; }
+
+      const number=line.match(/^(\s*)\d+[.)]\s+(.*)$/);
+      if(number){ const indent=Math.min(8,Math.floor(number[1].replace(/\t/g,'  ').length/2)); pushText('number',number[2],indent?{indent}:{}); i++; continue; }
+
+      if(/^\s*>/.test(line)){
+        const quoteLines=[];
+        while(i<lines.length && /^\s*>/.test(lines[i])) quoteLines.push(lines[i++].replace(/^\s*>\s?/,''));
+        const first=quoteLines[0]?.match(/^\[!([A-Za-z]+)\]\s*(.*)$/);
+        if(first){
+          const body=[first[2],...quoteLines.slice(1)].filter(Boolean).join('\n');
+          pushText('callout',`${first[1][0].toUpperCase()+first[1].slice(1).toLowerCase()}: ${body}`);
+        }else pushText('quote',quoteLines.join('\n'));
+        continue;
+      }
+
+      const image=line.match(/^\s*!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)\s*$/);
+      if(image){
+        const src=normalizeImageUrl(image[2]);
+        if(src){ blocks.push({id:uid('b'),type:'image',src,caption:'',alt:markdownInlineText(image[1])}); i++; continue; }
+      }
+
+      const link=line.match(/^\s*\[([^\]]+)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)\s*$/);
+      if(link){
+        const url=normalizeHyperlinkUrl(link[2]);
+        if(url){ blocks.push({id:uid('b'),type:'link',text:markdownInlineText(link[1]),url}); i++; continue; }
+      }
+
+      const paragraph=[trimmed]; i++;
+      while(i<lines.length){
+        const next=lines[i];
+        if(!next.trim()) break;
+        if(/^\s{0,3}(?:#{1,6})\s+/.test(next) || /^\s{0,3}(?:```|~~~)/.test(next) || /^\s*[-+*]\s+/.test(next) || /^\s*\d+[.)]\s+/.test(next) || /^\s*>/.test(next) || /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(next)) break;
+        if(i+1<lines.length && next.includes('|') && isMarkdownTableSeparator(lines[i+1])) break;
+        paragraph.push(next.trim()); i++;
+      }
+      pushText('text',paragraph.join(' '));
+    }
+    return blocks;
+  }
+
+  function selectionOffsetsWithin(root){
+    const sel=window.getSelection();
+    if(!sel?.rangeCount) return {start:(root.innerText||'').length,end:(root.innerText||'').length};
+    const range=sel.getRangeAt(0);
+    if(!root.contains(range.commonAncestorContainer)) return {start:(root.innerText||'').length,end:(root.innerText||'').length};
+    const before=document.createRange(); before.selectNodeContents(root); before.setEnd(range.startContainer,range.startOffset);
+    const through=document.createRange(); through.selectNodeContents(root); through.setEnd(range.endContainer,range.endOffset);
+    return {start:before.toString().length,end:through.toString().length};
+  }
+
+  function pasteMarkdownIntoBlock(content,markdown){
+    const row=content?.closest('.block-row'), location=findBlockLocation(row?.dataset.blockId), page=currentPage();
+    if(!location || !page || !isTextLikeBlock(location.block)) return false;
+    const parsed=parseMarkdownBlocks(markdown);
+    if(!parsed.length) return false;
+
+    const block=location.block, original=String(block.text||''), {start,end}=selectionOffsetsWithin(content);
+    const left=original.slice(0,start), right=original.slice(end), splitLinks=inlineLinksAroundRange(block,start,end);
+    const replacement=[];
+    if(left){ block.text=left; block.inlineLinks=normalizeInlineLinkRanges(splitLinks.left,left.length); if(!block.inlineLinks.length) delete block.inlineLinks; replacement.push(block); }
+    replacement.push(...parsed);
+    let trailing=null;
+    if(right){
+      const trailingType=['bullet','number','todo','toggle'].includes(block.type)?block.type:'text';
+      trailing={id:uid('b'),type:trailingType,text:right};
+      const trailingLinks=normalizeInlineLinkRanges(splitLinks.right,right.length); if(trailingLinks.length) trailing.inlineLinks=trailingLinks;
+      if(trailingType==='todo') trailing.checked=false;
+      replacement.push(trailing);
+    }
+    location.blocks.splice(location.index,1,...replacement);
+    ensureBlockList(location.blocks);
+    scheduleSave(); hideFloatingMenus(); renderBlocks(page);
+
+    const focusTarget=trailing || [...parsed].reverse().find(isTextLikeBlock) || (left?block:null);
+    if(focusTarget) focusBlock(focusTarget.id,(focusTarget.text||'').length);
+    toast(`Markdown pasted as ${parsed.length} block${parsed.length===1?'':'s'}`);
+    return true;
+  }
+
   function onBeforeInput(e){
     if(e.target===els.pageTitle && ['insertParagraph','insertLineBreak'].includes(e.inputType)) e.preventDefault();
   }
@@ -1653,11 +2344,30 @@
       e.target.dispatchEvent(new Event('input',{bubbles:true}));
       return;
     }
-    const item=[...(e.clipboardData?.items||[])].find(x=>x.type?.startsWith('image/')); if(!item)return;
-    const file=item.getAsFile(); if(!file)return;
-    const row=e.target.closest('.block-row'); if(!row)return;
-    e.preventDefault(); const page=currentPage(); const i=page.blocks.findIndex(b=>b.id===row.dataset.blockId); if(i<0)return;
-    const image={id:uid('b'),type:'image',src:'',caption:'',alt:''}; page.blocks.splice(i+1,0,image); renderBlocks(page); loadImageFileIntoBlock(file,image.id);
+    const item=[...(e.clipboardData?.items||[])].find(x=>x.type?.startsWith('image/'));
+    if(item){
+      const file=item.getAsFile();
+      const row=e.target.closest('.block-row'), location=findBlockLocation(row?.dataset.blockId);
+      if(file && location){
+        e.preventDefault();
+        const image={id:uid('b'),type:'image',src:'',caption:'',alt:''};
+        location.blocks.splice(location.index+1,0,image); renderBlocks(currentPage()); loadImageFileIntoBlock(file,image.id);
+        return;
+      }
+    }
+
+    const content=e.target.closest?.('.block-content');
+    if(content){
+      const linkPayload=clipboardLinkPayload(e.clipboardData);
+      if(linkPayload && pasteLinkIntoBlock(content,linkPayload)){ e.preventDefault(); return; }
+      const explicitMarkdown=String(e.clipboardData?.getData('text/markdown')||'');
+      const plainText=String(e.clipboardData?.getData('text/plain')||'');
+      const markdown=explicitMarkdown || plainText;
+      if(markdown && (explicitMarkdown || looksLikeMarkdown(markdown)) && pasteMarkdownIntoBlock(content,markdown)){
+        e.preventDefault();
+        return;
+      }
+    }
   }
 
   function updateEmojiMenu(content,b){
@@ -1728,6 +2438,7 @@
     const b=findBlock(activeSlashBlockId); if(!b)return;
     const parent=currentPage();
     b.type=type; b.text='';
+    if(!isListBlock(b)) delete b.indent;
     if(type==='todo') b.checked=false;
     if(type==='page'){
       const child=createSubpageForBlock(parent.id);
@@ -1775,7 +2486,7 @@
         <button class="block-menu-item" data-block-menu-action="turn-text" data-block-id="${id}">Turn into text</button>
         <button class="block-menu-item" data-block-menu-action="move-up" data-block-id="${id}">Move up</button>
         <button class="block-menu-item" data-block-menu-action="move-down" data-block-id="${id}">Move down</button>
-        <button class="block-menu-item danger" data-block-menu-action="delete" data-block-id="${id}">Delete</button>
+        ${blockDeleteMenuItem(id)}
       </div>`;
     els.blockMenu.classList.remove('hidden');
   }
@@ -1792,7 +2503,7 @@
       scheduleSave(); hideFloatingMenus(); renderBlocks(page); return;
     }
     if(action==='duplicate'){ blocks.splice(i+1,0,cloneBlockWithNewIds(blocks[i])); }
-    if(action==='turn-text'){ const b=blocks[i], fallback=blockTextFallback(b); b.type='text'; b.text=fallback; delete b.pageId; delete b.url; delete b.tableRows; delete b.tableHeaderRow; delete b.tableHeaderColumn; delete b.columns; }
+    if(action==='turn-text'){ const b=blocks[i], fallback=blockTextFallback(b); b.type='text'; b.text=fallback; delete b.indent; delete b.pageId; delete b.url; delete b.tableRows; delete b.tableHeaderRow; delete b.tableHeaderColumn; delete b.columns; }
     if(action==='move-up'&&i>0){ [blocks[i-1],blocks[i]]=[blocks[i],blocks[i-1]]; }
     if(action==='move-down'&&i<blocks.length-1){ [blocks[i+1],blocks[i]]=[blocks[i],blocks[i+1]]; }
     if(action==='delete'){ blocks.splice(i,1); ensureBlockList(blocks); }
@@ -2001,6 +2712,7 @@
   function hideFloatingMenus(){ els.slashMenu.classList.add('hidden'); hideEmojiMenu(); els.blockMenu.classList.add('hidden'); els.pageMetaMenu?.classList.add('hidden'); activeSlashBlockId=null; }
   function cancelPageOperations(){
     pageOperationEpoch+=1;
+    clearMultiBlockSelection();
     hideFloatingMenus();
     clearExternalIconDropState();
     activeImageBlockId=null; activeImageLinkBlockId=null;
@@ -2030,4 +2742,3 @@
 
   init();
 })();
-
