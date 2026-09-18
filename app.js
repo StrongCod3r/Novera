@@ -192,6 +192,8 @@
   let tableAxisDrag = null;
   let activeImageBlockId = null;
   let activeImageLinkBlockId = null;
+  let activeImageCropBlockId = null;
+  let imageCropSession = null;
   let pageOperationEpoch = 0;
   let multiBlockSelection = null;
   let selectedTableBlockId = null;
@@ -669,6 +671,7 @@
     els.blockEditor.innerHTML = page.blocks.map((b,i) => blockHTML(b,i,page.blocks)).join('');
     els.emptyHint.style.display = 'none';
     scheduleMermaidPreviews();
+    requestAnimationFrame(syncAllSimpleTableHandles);
     if(page.id===state.currentPageId) renderRightSidebar();
   }
 
@@ -887,9 +890,6 @@
     return `<svg class="table-axis-handle-icon" viewBox="0 0 12 18" aria-hidden="true" focusable="false"><circle cx="3.5" cy="3" r="1.25"></circle><circle cx="8.5" cy="3" r="1.25"></circle><circle cx="3.5" cy="9" r="1.25"></circle><circle cx="8.5" cy="9" r="1.25"></circle><circle cx="3.5" cy="15" r="1.25"></circle><circle cx="8.5" cy="15" r="1.25"></circle></svg>`;
   }
 
-  function tableSelectAllSvg(){
-    return `<svg class="table-select-all-icon" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><rect x="1" y="1" width="4" height="4" rx=".7"></rect><rect x="7" y="1" width="4" height="4" rx=".7"></rect><rect x="1" y="7" width="4" height="4" rx=".7"></rect><rect x="7" y="7" width="4" height="4" rx=".7"></rect></svg>`;
-  }
 
   function tableCellSelectionBounds(selection=tableCellSelection){
     if(!selection?.start || !selection?.end) return null;
@@ -910,14 +910,100 @@
   function simpleTableHTML(block,gutter){
     normalizeSimpleTableBlock(block);
     const rows=block.tableRows, colCount=rows[0]?.length||1, selected=selectedTableBlockId===block.id;
-    const columnControls=Array.from({length:colCount},(_,ci)=>`<th class="simple-table-col-control" scope="col" data-table-col-control="${ci}"><button type="button" class="table-axis-handle table-col-handle" draggable="true" data-table-col-menu="${ci}" title="Drag to reorder · click for column options" aria-label="Column ${ci+1}: drag to reorder or click for options">${tableAxisHandleSvg()}</button></th>`).join('');
-    const body=rows.map((row,ri)=>`<tr data-table-row="${ri}"><td class="simple-table-row-control"><button type="button" class="table-axis-handle table-row-handle" draggable="true" data-table-row-menu="${ri}" title="Drag to reorder · click for row options" aria-label="Row ${ri+1}: drag to reorder or click for options">${tableAxisHandleSvg()}</button></td>${row.map((cell,ci)=>{
+    const body=rows.map((row,ri)=>`<tr data-table-row="${ri}">${row.map((cell,ci)=>{
       const header=(block.tableHeaderRow&&ri===0)||(block.tableHeaderColumn&&ci===0);
       const tag=header?'th':'td';
       const rangeSelected=isTableCellInSelection(block.id,ri,ci), rangeAnchor=rangeSelected && tableCellSelection?.start?.row===ri && tableCellSelection?.start?.col===ci;
       return `<${tag} data-table-column="${ci}"><div class="simple-table-cell${rangeSelected?' cell-range-selected':''}${rangeAnchor?' cell-range-anchor':''}" contenteditable="true" spellcheck="true" data-table-cell="${ri}:${ci}">${escapeHtml(cell)}</div></${tag}>`;
     }).join('')}</tr>`).join('');
-    return `<div class="block-row simple-table-block${selected?' table-selected':''}" data-block-id="${block.id}" data-type="table">${gutter}<div class="simple-table-shell"><div class="simple-table-scroll"><table class="simple-table"><colgroup><col class="simple-table-control-col">${Array.from({length:colCount},()=>'<col>').join('')}</colgroup><thead class="simple-table-controls-head"><tr><th class="simple-table-corner-control"><button type="button" class="simple-table-select-all" data-table-select title="Select table" aria-label="Select entire table" aria-pressed="${selected?'true':'false'}">${tableSelectAllSvg()}</button></th>${columnControls}</tr></thead><tbody>${body}</tbody></table><button type="button" class="simple-table-add-column" data-table-add-col title="Add column" aria-label="Add column">＋</button></div><button type="button" class="simple-table-add-row" data-table-add-row title="Add row" aria-label="Add row">＋</button></div></div>`;
+    const colHandles=Array.from({length:colCount},(_,ci)=>`<button type="button" class="table-axis-handle table-col-handle" draggable="true" data-table-col-menu="${ci}" title="Drag to reorder · click for column options" aria-label="Column ${ci+1}: drag to reorder or click for options">${tableAxisHandleSvg()}</button>`).join('');
+    const rowHandles=rows.map((_,ri)=>`<button type="button" class="table-axis-handle table-row-handle" draggable="true" data-table-row-menu="${ri}" title="Drag to reorder · click for row options" aria-label="Row ${ri+1}: drag to reorder or click for options">${tableAxisHandleSvg()}</button>`).join('');
+    return `<div class="block-row simple-table-block${selected?' table-selected':''}" data-block-id="${block.id}" data-type="table">${gutter}<div class="simple-table-shell"><span class="simple-table-corner-hit" data-table-corner-select title="Select table" aria-label="Select entire table"></span><div class="simple-table-handle-layer" aria-hidden="false">${colHandles}${rowHandles}</div><div class="simple-table-scroll"><table class="simple-table"><colgroup>${Array.from({length:colCount},()=>'<col>').join('')}</colgroup><tbody>${body}</tbody></table></div><button type="button" class="simple-table-add-column" data-table-add-col title="Add column" aria-label="Add column">＋</button><button type="button" class="simple-table-add-row" data-table-add-row title="Add row" aria-label="Add row">＋</button></div></div>`;
+  }
+
+  let simpleTableHandleHover={blockId:null,row:null,col:null};
+
+  function syncSimpleTableHandles(tableBlock){
+    if(!tableBlock?.isConnected) return;
+    const shell=tableBlock.querySelector('.simple-table-shell');
+    const scroll=tableBlock.querySelector('.simple-table-scroll');
+    if(!shell||!scroll) return;
+    const shellRect=shell.getBoundingClientRect();
+    const scrollRect=scroll.getBoundingClientRect();
+    const firstRow=tableBlock.querySelector('tr[data-table-row="0"]');
+    const cells=firstRow?[...firstRow.querySelectorAll('[data-table-column]')]:[];
+    cells.forEach(cell=>{
+      const ci=Number(cell.dataset.tableColumn), handle=tableBlock.querySelector(`[data-table-col-menu="${ci}"]`);
+      if(!handle) return;
+      const rect=cell.getBoundingClientRect();
+      const centerX=rect.left+rect.width/2-shellRect.left;
+      const topLine=scrollRect.top-shellRect.top;
+      handle.style.left=`${centerX}px`;
+      handle.style.top=`${topLine}px`;
+      const visible=rect.right>scrollRect.left+1 && rect.left<scrollRect.right-1;
+      handle.style.visibility=visible?'visible':'hidden';
+    });
+    tableBlock.querySelectorAll('tr[data-table-row]').forEach(row=>{
+      const ri=Number(row.dataset.tableRow), handle=tableBlock.querySelector(`[data-table-row-menu="${ri}"]`);
+      const firstCell=row.querySelector('[data-table-column]');
+      if(!handle||!firstCell) return;
+      const rect=firstCell.getBoundingClientRect();
+      const leftLine=scrollRect.left-shellRect.left;
+      const centerY=rect.top+rect.height/2-shellRect.top;
+      handle.style.left=`${leftLine}px`;
+      handle.style.top=`${centerY}px`;
+      const visible=rect.bottom>scrollRect.top+1 && rect.top<scrollRect.bottom-1;
+      handle.style.visibility=visible?'visible':'hidden';
+    });
+    const addColumn=tableBlock.querySelector('[data-table-add-col]');
+    const table=tableBlock.querySelector('.simple-table');
+    if(addColumn&&table){
+      const tableRect=table.getBoundingClientRect();
+      addColumn.style.left=`${tableRect.right-shellRect.left}px`;
+      addColumn.style.top=`${scrollRect.top-shellRect.top}px`;
+      addColumn.style.height=`${scrollRect.height}px`;
+      const rightEdgeVisible=tableRect.right>=scrollRect.left-1 && tableRect.right<=scrollRect.right+1;
+      addColumn.style.visibility=rightEdgeVisible?'visible':'hidden';
+    }
+  }
+
+  function syncAllSimpleTableHandles(){
+    document.querySelectorAll('.simple-table-block[data-block-id]').forEach(syncSimpleTableHandles);
+  }
+
+  function setSimpleTableHandleHover(tableBlock,row=null,col=null){
+    if(!tableBlock){
+      document.querySelectorAll('.table-axis-handle.hover-visible').forEach(el=>el.classList.remove('hover-visible'));
+      simpleTableHandleHover={blockId:null,row:null,col:null};
+      return;
+    }
+    const blockId=tableBlock.dataset.blockId||null;
+    if(simpleTableHandleHover.blockId===blockId && simpleTableHandleHover.row===row && simpleTableHandleHover.col===col) return;
+    document.querySelectorAll('.table-axis-handle.hover-visible').forEach(el=>el.classList.remove('hover-visible'));
+    if(Number.isInteger(row)) tableBlock.querySelector(`[data-table-row-menu="${row}"]`)?.classList.add('hover-visible');
+    if(Number.isInteger(col)) tableBlock.querySelector(`[data-table-col-menu="${col}"]`)?.classList.add('hover-visible');
+    simpleTableHandleHover={blockId,row,col};
+  }
+
+  function onSimpleTableHandlePointerMove(e){
+    const handle=e.target.closest?.('.table-axis-handle');
+    if(handle){
+      const tableBlock=handle.closest('.simple-table-block[data-block-id]');
+      const row=handle.dataset.tableRowMenu!==undefined?Number(handle.dataset.tableRowMenu):null;
+      const col=handle.dataset.tableColMenu!==undefined?Number(handle.dataset.tableColMenu):null;
+      setSimpleTableHandleHover(tableBlock,Number.isInteger(row)?row:null,Number.isInteger(col)?col:null);
+      return;
+    }
+    const cell=e.target.closest?.('[data-table-cell]');
+    if(cell){
+      const tableBlock=cell.closest('.simple-table-block[data-block-id]');
+      const pos=tableCellCoordinates(cell);
+      setSimpleTableHandleHover(tableBlock,pos?.row??null,pos?.col??null);
+      return;
+    }
+    const tableBlock=e.target.closest?.('.simple-table-block[data-block-id]');
+    if(tableBlock){ setSimpleTableHandleHover(tableBlock,null,null); return; }
+    setSimpleTableHandleHover(null);
   }
 
   function tableCellCoordinates(cell){
@@ -1130,7 +1216,6 @@
     if(!selectedTableBlockId) return;
     const row=document.querySelector(`.simple-table-block[data-block-id="${selectedTableBlockId}"]`);
     row?.classList.remove('table-selected');
-    row?.querySelector('[data-table-select]')?.setAttribute('aria-pressed','false');
     selectedTableBlockId=null;
   }
 
@@ -1143,9 +1228,6 @@
     try{ window.getSelection()?.removeAllRanges(); }catch{}
     const row=document.querySelector(`.simple-table-block[data-block-id="${id}"]`);
     row?.classList.add('table-selected');
-    const button=row?.querySelector('[data-table-select]');
-    button?.setAttribute('aria-pressed','true');
-    button?.focus({preventScroll:true});
     return true;
   }
 
@@ -1514,13 +1596,269 @@
     return `<div class="image-url-editor" data-image-url-editor><div class="image-url-row"><input class="image-url-input" data-image-url-input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/image.jpg" value="${escapeHtml(current)}"><button class="image-url-submit" data-image-url-submit>Embed</button><button class="image-url-cancel" data-image-url-cancel>Cancel</button></div><div class="image-url-help">Paste a direct, public image URL. The image is tested before it is saved.</div><div class="image-url-error" data-image-url-error></div></div>`;
   }
 
+  function imageToolIcon(type){
+    if(type==='align') return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14"/><path d="M5 12h10"/><path d="M5 17h14"/></svg>`;
+    if(type==='caption') return `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M7 20h10"/></svg>`;
+    if(type==='crop') return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v14a2 2 0 0 0 2 2h12"/><path d="M3 7h14a2 2 0 0 1 2 2v12"/></svg>`;
+    if(type==='download') return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 20h14"/></svg>`;
+    if(type==='left') return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5v14"/><rect x="8" y="7" width="10" height="10" rx="1"/></svg>`;
+    if(type==='right') return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 5v14"/><rect x="6" y="7" width="10" height="10" rx="1"/></svg>`;
+    return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5v14"/><path d="M20 5v14"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>`;
+  }
+
+  function imageDisplayWidth(block){
+    const value=Number(block.imageWidth);
+    return Number.isFinite(value) && value>80 ? Math.round(value) : null;
+  }
+
+  function imageAlignment(block){
+    return ['left','center','right'].includes(block.imageAlign)?block.imageAlign:'center';
+  }
+
+  function normalizedImageCrop(block){
+    const raw=block.imageCrop&&typeof block.imageCrop==='object'?block.imageCrop:{};
+    const originalAspect=Math.max(.2,Math.min(5,Number(raw.originalAspect)||1));
+    const shape=raw.shape==='circle'?'circle':'rect';
+    const aspectRaw=shape==='circle'?1:(Number(raw.aspect)||originalAspect);
+    return {
+      enabled:!!raw.enabled,
+      shape,
+      aspect:Math.max(.2,Math.min(5,aspectRaw)),
+      originalAspect,
+      zoom:Math.max(1,Math.min(3,Number(raw.zoom)||1)),
+      x:Math.max(0,Math.min(100,Number.isFinite(Number(raw.x))?Number(raw.x):50)),
+      y:Math.max(0,Math.min(100,Number.isFinite(Number(raw.y))?Number(raw.y):50))
+    };
+  }
+
+  async function downloadImageBlock(id){
+    const b=findBlock(id); if(!b?.src) return;
+    const fallback=()=>{ const a=document.createElement('a'); a.href=b.src; a.target='_blank'; a.rel='noopener noreferrer'; a.download='image'; document.body.appendChild(a); a.click(); a.remove(); };
+    try{
+      const response=await fetch(b.src); if(!response.ok) throw new Error('download');
+      const blob=await response.blob();
+      const url=URL.createObjectURL(blob); const a=document.createElement('a');
+      const ext=(blob.type.split('/')[1]||'png').replace('jpeg','jpg').split('+')[0];
+      a.href=url; a.download=`image.${ext}`; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }catch{ fallback(); }
+  }
+
+  function setImageAlignment(id,align){
+    if(!['left','center','right'].includes(align)) return;
+    const b=findBlock(id); if(!b) return;
+    b.imageAlign=align; scheduleSave();
+    const row=document.querySelector(`.block-row[data-block-id="${id}"]`);
+    const figure=row?.querySelector('.image-figure');
+    if(figure){ figure.classList.remove('align-left','align-center','align-right'); figure.classList.add(`align-${align}`); }
+    row?.querySelector('[data-image-align-menu]')?.classList.add('hidden');
+    row?.querySelectorAll('[data-image-align-choice]').forEach(btn=>btn.classList.toggle('active',btn.dataset.imageAlignChoice===align));
+  }
+
+  function toggleImageCaption(id){
+    const b=findBlock(id); if(!b) return;
+    const wasVisible=b.showCaption!==false && (b.showCaption===true || !!String(b.caption||''));
+    b.showCaption=!wasVisible;
+    scheduleSave(); renderBlocks(currentPage());
+    if(!wasVisible) requestAnimationFrame(()=>{ const cap=document.querySelector(`.block-row[data-block-id="${id}"] [data-image-caption]`); cap?.focus(); });
+  }
+
+  function openImageCrop(id){
+    const b=findBlock(id); if(!b) return;
+    const row=document.querySelector(`.block-row[data-block-id="${id}"]`);
+    const source=row?.querySelector('.image-preview img');
+    const rect=source?.getBoundingClientRect();
+    const current=b.imageCrop&&typeof b.imageCrop==='object'?JSON.parse(JSON.stringify(b.imageCrop)):null;
+    const naturalAspect=source?.naturalWidth&&source?.naturalHeight?source.naturalWidth/source.naturalHeight:0;
+    const derivedAspect=naturalAspect || (rect?.height>0?rect.width/rect.height:1);
+    imageCropSession={id,original:current};
+    const crop=normalizedImageCrop(b);
+    if(!crop.enabled) b.imageCrop={enabled:true,originalAspect:derivedAspect,aspect:derivedAspect,zoom:1,x:50,y:50};
+    else b.imageCrop={...crop,originalAspect:crop.originalAspect||derivedAspect,enabled:true};
+    activeImageCropBlockId=id;
+    renderBlocks(currentPage());
+    scheduleImageCropDialogLayout(id);
+  }
+
+  function applyImageCropPreview(row,block){
+    const crop=normalizedImageCrop(block), preview=row?.querySelector('.image-preview'), img=preview?.querySelector('img');
+    if(!preview||!img) return;
+    preview.classList.toggle('crop-active',crop.enabled);
+    preview.classList.toggle('crop-circle',crop.enabled && crop.shape==='circle');
+    if(crop.enabled){
+      preview.style.aspectRatio=String(crop.aspect);
+      preview.style.borderRadius=crop.shape==='circle'?'50%':'4px';
+      preview.style.clipPath=crop.shape==='circle'?'circle(50% at 50% 50%)':'none';
+      preview.style.webkitClipPath=crop.shape==='circle'?'circle(50% at 50% 50%)':'none';
+      img.style.borderRadius=crop.shape==='circle'?'50%':'4px';
+      img.style.objectPosition=`${crop.x}% ${crop.y}%`;
+      img.style.transform=`scale(${crop.zoom})`;
+    }else{
+      preview.style.removeProperty('aspect-ratio'); preview.style.removeProperty('border-radius'); preview.style.removeProperty('clip-path'); preview.style.removeProperty('-webkit-clip-path');
+      img.style.removeProperty('border-radius'); img.style.removeProperty('object-position'); img.style.removeProperty('transform');
+    }
+    row.querySelector('[data-image-crop-zoom-value]')?.replaceChildren(document.createTextNode(`${crop.zoom.toFixed(1)}×`));
+    row.querySelector('[data-image-crop-x-value]')?.replaceChildren(document.createTextNode(`${Math.round(crop.x)}%`));
+    row.querySelector('[data-image-crop-y-value]')?.replaceChildren(document.createTextNode(`${Math.round(crop.y)}%`));
+  }
+
+  function updateImageCropControl(input){
+    const row=input.closest('.image-block'), b=findBlock(row?.dataset.blockId); if(!b) return;
+    const crop=normalizedImageCrop(b);
+    if(input.matches('[data-image-crop-zoom]')) crop.zoom=Number(input.value);
+    if(input.matches('[data-image-crop-x]')) crop.x=Number(input.value);
+    if(input.matches('[data-image-crop-y]')) crop.y=Number(input.value);
+    b.imageCrop={...crop,enabled:true};
+    applyImageCropPreview(row,b);
+  }
+
+  function setImageCropAspect(id,ratio){
+    const b=findBlock(id); if(!b) return;
+    const crop=normalizedImageCrop(b);
+    let next=crop.aspect, shape='rect';
+    if(ratio==='original') next=crop.originalAspect;
+    else if(ratio==='circle'){ next=1; shape='circle'; }
+    else next=Number(ratio);
+    if(!Number.isFinite(next)||next<=0) return;
+    b.imageCrop={...crop,enabled:true,shape,aspect:next};
+    const row=document.querySelector(`.block-row[data-block-id="${id}"]`); applyImageCropPreview(row,b);
+    row?.querySelectorAll('[data-image-crop-aspect]').forEach(btn=>{
+      const value=btn.dataset.imageCropAspect;
+      const isActive=value==='circle' ? shape==='circle' : (shape!=='circle' && Math.abs((value==='original'?crop.originalAspect:Number(value))-next)<.01);
+      btn.classList.toggle('active',isActive);
+    });
+    row?.querySelector('[data-image-crop-aspect-menu]')?.classList.add('hidden');
+    scheduleImageCropDialogLayout(id);
+  }
+
+  function scheduleImageCropDialogLayout(id){
+    requestAnimationFrame(()=>{
+      const row=document.querySelector(`.block-row[data-block-id="${id}"]`);
+      const img=row?.querySelector('[data-image-crop-source]');
+      if(!img) return;
+      const draw=()=>layoutImageCropDialog(id);
+      if(img.complete && img.naturalWidth) draw(); else img.addEventListener('load',draw,{once:true});
+    });
+  }
+
+  function cropDialogGeometry(id){
+    const row=document.querySelector(`.block-row[data-block-id="${id}"]`);
+    const stage=row?.querySelector('[data-image-crop-stage]'), img=row?.querySelector('[data-image-crop-source]'), frame=row?.querySelector('[data-image-crop-frame]');
+    if(!stage||!img||!frame) return null;
+    const sr=stage.getBoundingClientRect(), ir=img.getBoundingClientRect(), fr=frame.getBoundingClientRect();
+    return {row,stage,img,frame,sr,ir,fr,imgLeft:ir.left-sr.left,imgTop:ir.top-sr.top};
+  }
+
+  function cropMaxFit(imageWidth,imageHeight,aspect){
+    let width=imageWidth, height=width/aspect;
+    if(height>imageHeight){ height=imageHeight; width=height*aspect; }
+    return {width,height};
+  }
+
+  function layoutImageCropDialog(id){
+    const b=findBlock(id), g=cropDialogGeometry(id); if(!b||!g) return;
+    const crop=normalizedImageCrop(b), max=cropMaxFit(g.ir.width,g.ir.height,crop.aspect);
+    const width=Math.max(56,max.width/crop.zoom), height=Math.max(56,max.height/crop.zoom);
+    const travelX=Math.max(0,g.ir.width-width), travelY=Math.max(0,g.ir.height-height);
+    const left=g.imgLeft+travelX*(crop.x/100), top=g.imgTop+travelY*(crop.y/100);
+    Object.assign(g.frame.style,{left:`${left}px`,top:`${top}px`,width:`${Math.min(width,g.ir.width)}px`,height:`${Math.min(height,g.ir.height)}px`});
+    g.frame.classList.toggle('circle', crop.shape==='circle');
+  }
+
+  function updateCropFromDialogFrame(id,left,top,width,height,g){
+    const b=findBlock(id); if(!b) return;
+    const aspect=Math.max(.2,Math.min(5,width/Math.max(1,height)));
+    const max=cropMaxFit(g.ir.width,g.ir.height,aspect);
+    const zoom=Math.max(1,Math.min(3,max.width/Math.max(1,width)));
+    const actualWidth=max.width/zoom, actualHeight=max.height/zoom;
+    const travelX=Math.max(0,g.ir.width-actualWidth), travelY=Math.max(0,g.ir.height-actualHeight);
+    const x=travelX?((left-g.imgLeft)/travelX)*100:50;
+    const y=travelY?((top-g.imgTop)/travelY)*100:50;
+    const base=normalizedImageCrop(b);
+    b.imageCrop={...base,enabled:true,aspect,zoom,x:Math.max(0,Math.min(100,x)),y:Math.max(0,Math.min(100,y))};
+    layoutImageCropDialog(id);
+  }
+
+  function startImageCropFrameMove(frame,id,event){
+    const g=cropDialogGeometry(id); if(!g) return;
+    event.preventDefault(); event.stopPropagation();
+    const startX=event.clientX,startY=event.clientY;
+    const startLeft=g.fr.left-g.sr.left,startTop=g.fr.top-g.sr.top,width=g.fr.width,height=g.fr.height;
+    const minLeft=g.imgLeft,maxLeft=g.imgLeft+g.ir.width-width,minTop=g.imgTop,maxTop=g.imgTop+g.ir.height-height;
+    const move=ev=>{
+      const left=Math.max(minLeft,Math.min(maxLeft,startLeft+ev.clientX-startX));
+      const top=Math.max(minTop,Math.min(maxTop,startTop+ev.clientY-startY));
+      g.frame.style.left=`${left}px`; g.frame.style.top=`${top}px`;
+      updateCropFromDialogFrame(id,left,top,width,height,g);
+    };
+    const up=()=>{ window.removeEventListener('mousemove',move,true); window.removeEventListener('mouseup',up,true); };
+    window.addEventListener('mousemove',move,true); window.addEventListener('mouseup',up,true);
+  }
+
+  function startImageCropFrameResize(handle,id,event){
+    const g=cropDialogGeometry(id); if(!g) return;
+    event.preventDefault(); event.stopPropagation();
+    const dir=handle.dataset.imageCropHandle||'', startX=event.clientX,startY=event.clientY;
+    const base={left:g.fr.left-g.sr.left,top:g.fr.top-g.sr.top,right:g.fr.right-g.sr.left,bottom:g.fr.bottom-g.sr.top};
+    const bounds={left:g.imgLeft,top:g.imgTop,right:g.imgLeft+g.ir.width,bottom:g.imgTop+g.ir.height};
+    const minSize=56;
+    const move=ev=>{
+      const dx=ev.clientX-startX,dy=ev.clientY-startY; let {left,top,right,bottom}=base;
+      if(dir.includes('w')) left=Math.max(bounds.left,Math.min(right-minSize,base.left+dx));
+      if(dir.includes('e')) right=Math.min(bounds.right,Math.max(left+minSize,base.right+dx));
+      if(dir.includes('n')) top=Math.max(bounds.top,Math.min(bottom-minSize,base.top+dy));
+      if(dir.includes('s')) bottom=Math.min(bounds.bottom,Math.max(top+minSize,base.bottom+dy));
+      updateCropFromDialogFrame(id,left,top,right-left,bottom-top,g);
+    };
+    const up=()=>{ window.removeEventListener('mousemove',move,true); window.removeEventListener('mouseup',up,true); };
+    window.addEventListener('mousemove',move,true); window.addEventListener('mouseup',up,true);
+  }
+
+  function resetImageCrop(id){
+    const b=findBlock(id); if(!b) return;
+    const crop=normalizedImageCrop(b);
+    b.imageCrop={...crop,enabled:true,aspect:crop.originalAspect,zoom:1,x:50,y:50};
+    renderBlocks(currentPage());
+  }
+
+  function applyImageCrop(id){
+    if(activeImageCropBlockId!==id) return;
+    activeImageCropBlockId=null; imageCropSession=null; scheduleSave(); renderBlocks(currentPage());
+  }
+
+  function cancelImageCrop(id){
+    const b=findBlock(id); if(!b) return;
+    if(imageCropSession?.id===id){
+      if(imageCropSession.original) b.imageCrop=imageCropSession.original; else delete b.imageCrop;
+    }
+    activeImageCropBlockId=null; imageCropSession=null; renderBlocks(currentPage());
+  }
+
+  function imageCropPanelHTML(block){
+    if(activeImageCropBlockId!==block.id) return '';
+    const crop=normalizedImageCrop(block);
+    const active=(ratio)=>Math.abs(crop.aspect-ratio)<.01?' active':'';
+    return `<div class="image-crop-backdrop" data-image-crop-backdrop><div class="image-crop-dialog" data-image-crop-dialog><div class="image-crop-header"><div class="image-crop-header-left"><button class="image-crop-aspect-trigger" data-image-crop-aspect-toggle title="Aspect ratio"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="11" height="11" rx="1.5"/><rect x="9" y="8" width="11" height="11" rx="1.5"/></svg>${chevronSvg()}</button><div class="image-crop-aspect-menu hidden" data-image-crop-aspect-menu><button data-image-crop-aspect="original" class="${crop.shape!=='circle' && Math.abs(crop.aspect-crop.originalAspect)<.01?'active':''}">Original</button><button data-image-crop-aspect="1" class="${crop.shape!=='circle' ? active(1) : ''}">Square</button><button data-image-crop-aspect="circle" class="${crop.shape==='circle'?'active':''}">Circle</button><button data-image-crop-aspect="1.333333" class="${crop.shape!=='circle' ? active(1.333333) : ''}">4:3</button><button data-image-crop-aspect="1.777778" class="${crop.shape!=='circle' ? active(1.777778) : ''}">16:9</button></div></div><div class="image-crop-header-title">Crop image</div><div class="image-crop-header-right"><button data-image-crop-cancel>Cancel</button><button class="image-crop-save" data-image-crop-apply>Save</button></div></div><div class="image-crop-stage-wrap"><div class="image-crop-stage" data-image-crop-stage><img class="image-crop-stage-image" data-image-crop-source src="${escapeHtml(block.src)}" alt=""><div class="image-crop-frame" data-image-crop-frame><button class="image-crop-handle corner nw" data-image-crop-handle="nw" aria-label="Resize crop"></button><button class="image-crop-handle edge n" data-image-crop-handle="n" aria-label="Resize crop"></button><button class="image-crop-handle corner ne" data-image-crop-handle="ne" aria-label="Resize crop"></button><button class="image-crop-handle edge e" data-image-crop-handle="e" aria-label="Resize crop"></button><button class="image-crop-handle corner se" data-image-crop-handle="se" aria-label="Resize crop"></button><button class="image-crop-handle edge s" data-image-crop-handle="s" aria-label="Resize crop"></button><button class="image-crop-handle corner sw" data-image-crop-handle="sw" aria-label="Resize crop"></button><button class="image-crop-handle edge w" data-image-crop-handle="w" aria-label="Resize crop"></button></div><div class="image-crop-stage-hint">Drag to reposition</div></div></div></div></div>`;
+  }
+
   function imageHTML(block, gutter){
     const caption=escapeHtml(block.caption||'');
     const linkEditor=imageLinkEditorHTML(block);
     if(!block.src){
       return `<div class="block-row image-block" data-block-id="${block.id}" data-type="image">${gutter}<div class="image-block-body"><div class="image-empty"><div class="image-empty-icon">🖼️</div><div class="image-empty-copy"><div class="image-empty-title">Add an image</div><div class="image-empty-sub">Upload from your device or embed with a link.</div></div><div class="image-buttons"><button class="image-action-btn" data-image-upload>Upload</button><button class="image-action-btn" data-image-url>Embed link</button></div></div>${linkEditor}</div></div>`;
     }
-    return `<div class="block-row image-block" data-block-id="${block.id}" data-type="image">${gutter}<div class="image-block-body"><figure class="image-figure"><div class="image-preview"><img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt||block.caption||'Image')}" loading="lazy" decoding="async"><div class="image-toolbar"><button data-image-upload>Replace</button><button data-image-url>Link</button><button data-image-remove>Remove</button></div></div>${linkEditor}<figcaption class="image-caption" contenteditable="true" data-image-caption data-placeholder="Write a caption…">${caption}</figcaption></figure></div></div>`;
+    const width=imageDisplayWidth(block), align=imageAlignment(block), crop=normalizedImageCrop(block);
+    const widthStyle=width?` style="width:${width}px"`:'';
+    const cropClass=crop.enabled?` crop-active${crop.shape==='circle'?' crop-circle':''}`:'';
+    const previewStyle=crop.enabled
+      ?` style="aspect-ratio:${crop.aspect};${crop.shape==='circle'?'border-radius:50%;clip-path:circle(50% at 50% 50%);-webkit-clip-path:circle(50% at 50% 50%);':''}"`
+      :'';
+    const imgStyle=crop.enabled
+      ?` style="object-position:${crop.x}% ${crop.y}%;transform:scale(${crop.zoom});${crop.shape==='circle'?'border-radius:50%;':''}"`
+      :'';
+    const captionVisible=block.showCaption!==false && (block.showCaption===true || !!String(block.caption||''));
+    const cropOpen=activeImageCropBlockId===block.id;
+    return `<div class="block-row image-block" data-block-id="${block.id}" data-type="image">${gutter}<div class="image-block-body"><figure class="image-figure align-${align}"><div class="image-preview-shell${cropOpen?' image-ui-open':''}"${widthStyle}><div class="image-toolbar"><button class="image-tool-btn" data-image-align title="Alignment">${imageToolIcon('align')}</button><button class="image-tool-btn${captionVisible?' active':''}" data-image-caption-toggle title="Caption">${imageToolIcon('caption')}</button><button class="image-tool-btn${crop.enabled?' active':''}" data-image-crop title="Crop">${imageToolIcon('crop')}</button><div class="image-toolbar-sep"></div><button class="image-tool-btn" data-image-download title="Download">${imageToolIcon('download')}</button></div><div class="image-align-toolbar hidden" data-image-align-menu><button class="image-tool-btn${align==='left'?' active':''}" data-image-align-choice="left" title="Align left">${imageToolIcon('left')}</button><button class="image-tool-btn${align==='center'?' active':''}" data-image-align-choice="center" title="Align center">${imageToolIcon('center')}</button><button class="image-tool-btn${align==='right'?' active':''}" data-image-align-choice="right" title="Align right">${imageToolIcon('right')}</button></div>${imageCropPanelHTML(block)}<button class="image-resize-handle left" data-image-resize="left" aria-label="Resize image"></button><div class="image-preview${cropClass}"${previewStyle}><img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt||block.caption||'Image')}" loading="lazy" decoding="async"${imgStyle}></div><button class="image-resize-handle right" data-image-resize="right" aria-label="Resize image"></button>${captionVisible?`<figcaption class="image-caption" contenteditable="true" data-image-caption data-placeholder="Write a caption…">${caption}</figcaption>`:''}</div>${linkEditor}</figure></div></div>`;
   }
 
   function databaseHTML(block){
@@ -1588,6 +1926,7 @@
     document.addEventListener('auxclick', onAuxClick);
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('pointerdown', onPaneResizeStart);
+    document.addEventListener('pointermove', onSimpleTableHandlePointerMove, true);
     document.addEventListener('input', onInput);
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('change', onChange);
@@ -1600,8 +1939,8 @@
     document.addEventListener('cut', onCut);
     document.addEventListener('beforeinput', onBeforeInput);
     document.addEventListener('dragend', clearDragState);
-    document.addEventListener('scroll', e=>{ if(e.target?.matches?.('[data-code-editor]')) syncCodeScroll(e.target); if(multiBlockSelection?.active) renderMultiBlockSelection(); }, true);
-    window.addEventListener('resize', ()=>{ hideFloatingMenus(); updateSidebarOverflow(); if(multiBlockSelection?.active) renderMultiBlockSelection(); });
+    document.addEventListener('scroll', e=>{ if(e.target?.matches?.('[data-code-editor]')) syncCodeScroll(e.target); if(e.target?.matches?.('.simple-table-scroll')) syncSimpleTableHandles(e.target.closest('.simple-table-block')); if(multiBlockSelection?.active) renderMultiBlockSelection(); }, true);
+    window.addEventListener('resize', ()=>{ hideFloatingMenus(); updateSidebarOverflow(); syncAllSimpleTableHandles(); if(multiBlockSelection?.active) renderMultiBlockSelection(); if(activeImageCropBlockId) scheduleImageCropDialogLayout(activeImageCropBlockId); });
   }
 
   function onPaneResizeStart(e){
@@ -1704,7 +2043,7 @@
       if(e.target.closest('[data-mermaid-preview-toggle]')){ const b=findBlock(id); if(b?.language==='mermaid'){ b.mermaidPreview=b.mermaidPreview===false; scheduleSave(); renderBlocks(currentPage()); focusCodeBlock(id); } return; }
       if(e.target.closest('[data-code-wrap]')){ const b=findBlock(id); if(b){ b.codeWrap=!b.codeWrap; scheduleSave(); renderBlocks(currentPage()); focusCodeBlock(id); } return; }
       if(e.target.closest('[data-code-more]')){ showCodeOptions(blockRow,id); return; }
-      if(e.target.closest('[data-table-select]')){ selectSimpleTable(id); return; }
+      if(e.target.closest('[data-table-corner-select]')){ selectSimpleTable(id); return; }
       const rowMenu=e.target.closest('[data-table-row-menu]');
       if(rowMenu){ showSimpleTableAxisMenu(rowMenu,id,'row',Number(rowMenu.dataset.tableRowMenu)); return; }
       const colMenu=e.target.closest('[data-table-col-menu]');
@@ -1719,7 +2058,20 @@
       if(e.target.closest('[data-image-url]')){ openImageUrlEditor(id); return; }
       if(e.target.closest('[data-image-url-submit]')){ commitImageUrl(id, blockRow.querySelector('[data-image-url-input]')); return; }
       if(e.target.closest('[data-image-url-cancel]')){ activeImageLinkBlockId=null; renderBlocks(currentPage()); return; }
-      if(e.target.closest('[data-image-remove]')){ const b=findBlock(id); if(b){ b.src=''; b.alt=''; scheduleSave(); renderBlocks(currentPage()); } return; }
+      if(e.target.closest('[data-image-remove]')){ const b=findBlock(id); if(b){ b.src=''; b.alt=''; delete b.imageWidth; scheduleSave(); renderBlocks(currentPage()); } return; }
+      const imageAlignChoice=e.target.closest('[data-image-align-choice]');
+      if(imageAlignChoice){ setImageAlignment(id,imageAlignChoice.dataset.imageAlignChoice); return; }
+      if(e.target.closest('[data-image-align]')){ const menu=blockRow.querySelector('[data-image-align-menu]'); menu?.classList.toggle('hidden'); return; }
+      if(e.target.closest('[data-image-caption-toggle]')){ toggleImageCaption(id); return; }
+      if(e.target.closest('[data-image-crop]')){ if(activeImageCropBlockId===id) cancelImageCrop(id); else openImageCrop(id); return; }
+      if(e.target.closest('[data-image-crop-aspect-toggle]')){ blockRow.querySelector('[data-image-crop-aspect-menu]')?.classList.toggle('hidden'); return; }
+      if(e.target.matches('[data-image-crop-backdrop]')){ cancelImageCrop(id); return; }
+      const cropAspect=e.target.closest('[data-image-crop-aspect]');
+      if(cropAspect){ setImageCropAspect(id,cropAspect.dataset.imageCropAspect); return; }
+      if(e.target.closest('[data-image-crop-reset]')){ resetImageCrop(id); return; }
+      if(e.target.closest('[data-image-crop-cancel]')){ cancelImageCrop(id); return; }
+      if(e.target.closest('[data-image-crop-apply]')){ applyImageCrop(id); return; }
+      if(e.target.closest('[data-image-download]')){ downloadImageBlock(id); return; }
       if(e.target.closest('.toggle-prefix')){ const b=findBlock(id); b.open=!b.open; scheduleSave(); renderCurrentBlocksKeepFocus(); return; }
       if(e.target.matches('[data-db-add-row]')){ const b=findBlock(id); b.rows.push(b.columns.map(()=>'')); scheduleSave(); renderCurrentBlocksKeepFocus(); return; }
       if(e.target.matches('[data-db-add-col]')){ const b=findBlock(id); b.columns.push('Property'); b.rows.forEach(r=>r.push('')); scheduleSave(); renderCurrentBlocksKeepFocus(); return; }
@@ -1735,13 +2087,22 @@
   }
 
   function onMouseDown(e){
+    const cropHandle=e.target.closest?.('[data-image-crop-handle]');
+    if(e.button===0 && cropHandle){ const row=cropHandle.closest('.image-block'); if(row){ startImageCropFrameResize(cropHandle,row.dataset.blockId,e); return; } }
+    const cropFrame=e.target.closest?.('[data-image-crop-frame]');
+    if(e.button===0 && cropFrame){ const row=cropFrame.closest('.image-block'); if(row){ startImageCropFrameMove(cropFrame,row.dataset.blockId,e); return; } }
+    const imageResize=e.target.closest?.('[data-image-resize]');
+    if(e.button===0 && imageResize){
+      const row=imageResize.closest('.image-block');
+      if(row){ startImageResize(imageResize,row.dataset.blockId,imageResize.dataset.imageResize,e); return; }
+    }
     if(e.button===0){
       const tableCell=e.target.closest?.('[data-table-cell]');
       if(tableCell && els.blockEditor?.contains(tableCell)){
         beginTableCellSelection(e,tableCell);
       }else{
         clearTableCellSelection();
-        if(selectedTableBlockId && !e.target.closest?.('[data-table-select]')) clearSelectedTable();
+        if(selectedTableBlockId && !e.target.closest?.('[data-table-corner-select]')) clearSelectedTable();
         const content=e.target.closest?.('.block-content[contenteditable="true"]');
         if(content && els.blockEditor?.contains(content)) beginMultiBlockSelection(e,content);
         else clearMultiBlockSelection();
@@ -2113,8 +2474,10 @@
       normalizeSimpleTableBlock(b); const [ri,ci]=e.target.dataset.tableCell.split(':').map(Number);
       if(b.tableRows[ri]) b.tableRows[ri][ci]=e.target.innerText.replace(/\n$/,''); scheduleSave('merge'); return;
     }
+    const imageCropInput=e.target.closest('[data-image-crop-zoom],[data-image-crop-x],[data-image-crop-y]');
+    if(imageCropInput){ updateImageCropControl(imageCropInput); return; }
     const imageCaption=e.target.closest('[data-image-caption]');
-    if(imageCaption){ const row=imageCaption.closest('.image-block'); const b=findBlock(row.dataset.blockId); if(b){ b.caption=imageCaption.innerText.replace(/\n$/, ''); scheduleSave('merge'); } return; }
+    if(imageCaption){ const row=imageCaption.closest('.image-block'); const b=findBlock(row.dataset.blockId); if(b){ b.caption=imageCaption.innerText.replace(/\n$/, ''); b.showCaption=true; scheduleSave('merge'); } return; }
     const row=e.target.closest('.database-block');
     if(row){
       const b=findBlock(row.dataset.blockId); if(!b) return;
@@ -2289,6 +2652,26 @@
       const nb={id:uid('b'),type:nextType,text:right}; if(isListBlock(nb)) setListIndentLevel(nb,listIndentLevel(b)); const nextLinks=normalizeInlineLinkRanges(linkSplit.right,right.length); if(nextLinks.length) nb.inlineLinks=nextLinks; if(nextType==='todo') nb.checked=false;
       blocks.splice(index+1,0,nb); scheduleSave(); renderBlocks(page); focusBlock(nb.id,0); return;
     }
+    if(e.key==='Backspace' && (b.text||'')==='' && index===0 && blocks===page.blocks){
+      e.preventDefault();
+      blocks.splice(index,1);
+      scheduleSave();
+      renderBlocks(page);
+      requestAnimationFrame(()=>{
+        els.pageTitle.focus();
+        setCaretOffset(els.pageTitle,(page.title||'').length);
+      });
+      return;
+    }
+    if(e.key==='Backspace' && (b.text||'')==='' && index>0){
+      e.preventDefault();
+      const prev=blocks[index-1];
+      blocks.splice(index,1);
+      scheduleSave();
+      renderBlocks(page);
+      if(isTextLikeBlock(prev)) focusBlock(prev.id,(prev.text||'').length);
+      return;
+    }
     if(e.key==='Backspace' && (b.text||'')==='' && isListBlock(b)){
       e.preventDefault();
       if(listIndentLevel(b)>0) changeListIndent(blocks,index,-1);
@@ -2297,10 +2680,6 @@
       renderBlocks(page);
       focusBlock(b.id,0);
       return;
-    }
-    if(e.key==='Backspace' && (b.text||'')==='' && index>0){
-      e.preventDefault(); const prev=blocks[index-1]; blocks.splice(index,1); scheduleSave(); renderBlocks(page);
-      if(isTextLikeBlock(prev)) focusBlock(prev.id,(prev.text||'').length); return;
     }
     if(e.key==='Backspace' && getCaretOffset(content)===0 && index>0){
       const prev=blocks[index-1];
@@ -2327,7 +2706,7 @@
         tableAxisDrag={blockId,axis,index,targetIndex:index,after:false};
         clearTableCellSelection();
         clearSelectedTable();
-        if(axis==='row') tableHandle.closest('tr[data-table-row]')?.classList.add('table-row-dragging');
+        if(axis==='row') tableBlock.querySelector(`tr[data-table-row="${index}"]`)?.classList.add('table-row-dragging');
         else markTableColumnDragState(tableBlock,index,'table-col-dragging');
         if(e.dataTransfer){
           e.dataTransfer.effectAllowed='move';
@@ -2493,7 +2872,6 @@
   }
 
   function markTableColumnDragState(tableBlock,index,className){
-    tableBlock?.querySelector?.(`[data-table-col-control="${index}"]`)?.classList.add(className);
     tableBlock?.querySelectorAll?.(`[data-table-column="${index}"]`).forEach(cell=>cell.classList.add(className));
   }
 
@@ -2511,27 +2889,30 @@
 
   function tableAxisDropTarget(e,tableBlock,axis){
     if(axis==='row'){
-      const row=e.target.closest?.('tr[data-table-row]');
-      if(!row || !tableBlock.contains(row)) return null;
-      const index=Number(row.dataset.tableRow);
-      if(!Number.isInteger(index)) return null;
-      const rect=row.getBoundingClientRect();
-      return {index,after:e.clientY>=rect.top+rect.height/2};
-    }
-    let index=null, rect=null;
-    const control=e.target.closest?.('[data-table-col-control]');
-    if(control && tableBlock.contains(control)){
-      index=Number(control.dataset.tableColControl);
-      rect=control.getBoundingClientRect();
-    }else{
-      const cell=e.target.closest?.('[data-table-column]');
-      if(cell && tableBlock.contains(cell)){
-        index=Number(cell.dataset.tableColumn);
-        rect=cell.getBoundingClientRect();
+      const rows=[...tableBlock.querySelectorAll('tr[data-table-row]')];
+      if(!rows.length) return null;
+      let best=null, bestDistance=Infinity;
+      for(const row of rows){
+        const rect=row.getBoundingClientRect();
+        const center=rect.top+rect.height/2;
+        const distance=Math.abs(e.clientY-center);
+        if(distance<bestDistance){ bestDistance=distance; best={index:Number(row.dataset.tableRow),rect}; }
       }
+      if(!best||!Number.isInteger(best.index)) return null;
+      return {index:best.index,after:e.clientY>=best.rect.top+best.rect.height/2};
     }
-    if(!Number.isInteger(index) || !rect) return null;
-    return {index,after:e.clientX>=rect.left+rect.width/2};
+    const firstRow=tableBlock.querySelector('tr[data-table-row="0"]');
+    const cells=firstRow?[...firstRow.querySelectorAll('[data-table-column]')]:[];
+    if(!cells.length) return null;
+    let best=null, bestDistance=Infinity;
+    for(const cell of cells){
+      const rect=cell.getBoundingClientRect();
+      const center=rect.left+rect.width/2;
+      const distance=Math.abs(e.clientX-center);
+      if(distance<bestDistance){ bestDistance=distance; best={index:Number(cell.dataset.tableColumn),rect}; }
+    }
+    if(!best||!Number.isInteger(best.index)) return null;
+    return {index:best.index,after:e.clientX>=best.rect.left+best.rect.width/2};
   }
 
   function reorderSimpleTableAxis(block,axis,fromIndex,targetIndex,after){
@@ -3302,7 +3683,7 @@
     clearSelectedTable();
     hideFloatingMenus();
     clearExternalIconDropState();
-    activeImageBlockId=null; activeImageLinkBlockId=null;
+    activeImageBlockId=null; activeImageLinkBlockId=null; activeImageCropBlockId=null; imageCropSession=null;
     if(els.imageFileInput) els.imageFileInput.value='';
     if(els.pageIconFileInput) els.pageIconFileInput.value='';
     if(els.pageComments){ els.pageComments.classList.add('hidden'); els.pageComments.innerHTML=''; }

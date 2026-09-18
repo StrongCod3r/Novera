@@ -223,8 +223,9 @@ body.dark {
 .block-drag-icon { width:12px; height:22px; display:block; overflow:visible; fill:currentColor; }
 .block-drag-icon circle { r:1.45; }
 .block-gutter button:hover { background:var(--hover); color:var(--muted); }
-.block-content { flex:1; min-width:0; outline:0; white-space:pre-wrap; overflow-wrap:anywhere; padding:3px 2px; font-size:16px; line-height:1.5; border-radius:2px; }
-.block-content[data-placeholder]:focus[data-empty="true"]:before { content:attr(data-placeholder); color:var(--faint); pointer-events:none; }
+.block-content { position:relative; flex:1; min-width:0; outline:0; white-space:pre-wrap; overflow-wrap:anywhere; padding:3px 2px; font-size:16px; line-height:1.5; border-radius:2px; }
+.block-content[data-placeholder]:focus[data-empty="true"]::after { content:attr(data-placeholder); position:absolute; left:2px; top:3px; color:var(--faint); pointer-events:none; user-select:none; white-space:pre; font:inherit; line-height:inherit; }
+.block-row[data-type="callout"] .block-content[data-placeholder]:focus[data-empty="true"]::after { left:34px; }
 .inline-link { color:var(--blue); text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:2px; border-radius:2px; cursor:pointer; }
 .inline-link:hover { background:color-mix(in srgb,var(--blue) 10%,transparent); }
 .block-content:focus .inline-link { cursor:text; }
@@ -337,67 +338,151 @@ body.dark {
 .image-url-help { margin-top:7px; color:var(--muted); font-size:11px; line-height:1.4; }
 .image-url-error { margin-top:6px; color:var(--danger); font-size:11px; min-height:15px; }
 .image-url-editor.loading .image-url-submit { opacity:.65; pointer-events:none; }
-.image-figure { margin:0; width:100%; }
-.image-preview { position:relative; width:100%; border-radius:4px; overflow:hidden; background:var(--hover); }
-.image-preview img { display:block; width:auto; max-width:100%; max-height:620px; object-fit:contain; border-radius:4px; }
-.image-toolbar { position:absolute; top:8px; right:8px; display:flex; gap:4px; opacity:0; transform:translateY(-2px); transition:opacity .12s, transform .12s; }
-.image-preview:hover .image-toolbar { opacity:1; transform:translateY(0); }
-.image-toolbar button { border:1px solid rgba(15,15,15,.12); background:rgba(255,255,255,.94); color:#37352f; border-radius:5px; padding:5px 8px; font-size:11px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
-.image-toolbar button:hover { background:#fff; }
-.image-caption { outline:0; color:var(--muted); font-size:12px; line-height:1.4; text-align:center; padding:6px 10px 0; min-height:23px; }
+.image-figure { margin:0; width:100%; display:flex; flex-direction:column; }
+.image-figure.align-left { align-items:flex-start; }
+.image-figure.align-center { align-items:center; }
+.image-figure.align-right { align-items:flex-end; }
+.image-preview-shell { position:relative; display:inline-block; max-width:100%; }
+.image-preview { position:relative; width:100%; border-radius:4px; overflow:visible; background:transparent; }
+.image-preview.crop-circle { border-radius:50%; clip-path:circle(50% at 50% 50%); -webkit-clip-path:circle(50% at 50% 50%); }
+.image-preview.crop-circle img { border-radius:50%; }
+.image-preview.crop-active { overflow:hidden; }
+.image-preview img { display:block; width:100%; height:auto; max-width:100%; max-height:720px; object-fit:contain; border-radius:4px; background:transparent; transform-origin:center center; }
+.image-preview.crop-active img { width:100%; height:100%; max-height:none; object-fit:cover; }
+.image-toolbar,
+.image-align-toolbar { position:absolute; left:50%; display:flex; align-items:center; gap:2px; padding:3px; border:1px solid var(--border); background:color-mix(in srgb,var(--panel) 94%,var(--text) 6%); color:var(--text); border-radius:9px; box-shadow:0 8px 24px color-mix(in srgb,var(--text) 18%,transparent); z-index:6; }
+.image-toolbar { top:10px; transform:translate(-50%,-6px); opacity:0; pointer-events:none; transition:opacity .14s,transform .14s; }
+.image-preview-shell:hover .image-toolbar,
+.image-preview-shell:focus-within .image-toolbar,
+.image-preview-shell.image-ui-open .image-toolbar { opacity:1; pointer-events:auto; transform:translate(-50%,0); }
+.image-align-toolbar { top:48px; transform:translateX(-50%); }
+.image-align-toolbar.hidden { display:none; }
+.image-tool-btn { min-width:28px; height:28px; border:0; background:transparent; color:inherit; border-radius:6px; display:grid; place-items:center; padding:0 6px; }
+.image-tool-btn:hover,.image-tool-btn.active { background:var(--hover); }
+.image-tool-btn svg { width:16px; height:16px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.image-toolbar-sep { width:1px; height:18px; background:var(--border); margin:0 1px; }
+.image-resize-handle { position:absolute; top:50%; transform:translateY(-50%); width:28px; height:72px; border:0; padding:0; background:transparent; opacity:0; pointer-events:none; transition:opacity .12s; z-index:4; }
+.image-resize-handle.left { left:-18px; }
+.image-resize-handle.right { right:-18px; }
+.image-preview-shell:hover .image-resize-handle,
+.image-preview-shell:focus-within .image-resize-handle,
+.image-preview-shell.resizing .image-resize-handle,
+.image-preview-shell.image-ui-open .image-resize-handle { opacity:1; pointer-events:auto; }
+.image-resize-handle::before { content:''; position:absolute; left:50%; top:50%; width:12px; height:56px; transform:translate(-50%,-50%); border-radius:999px; border:1px solid var(--border); background:var(--panel); box-shadow:0 2px 8px color-mix(in srgb,var(--text) 16%,transparent); transition:background .12s,border-color .12s,box-shadow .12s; }
+.image-resize-handle::after { content:''; position:absolute; left:50%; top:50%; width:2px; height:24px; transform:translate(-50%,-50%); border-radius:999px; background:var(--muted); }
+.image-resize-handle:hover::before { background:color-mix(in srgb,var(--panel) 88%,var(--text)); border-color:color-mix(in srgb,var(--text) 24%,var(--border)); box-shadow:0 3px 10px color-mix(in srgb,var(--text) 20%,transparent); }
+.image-preview-shell.resizing .image-toolbar { opacity:1; pointer-events:auto; }
+.image-caption { outline:0; color:var(--muted); font-size:12px; line-height:1.4; text-align:center; padding:8px 10px 0; min-height:23px; width:100%; }
 .image-caption:empty:before { content:attr(data-placeholder); color:var(--faint); pointer-events:none; }
+.image-crop-backdrop { position:fixed; inset:0; z-index:120; display:grid; place-items:center; padding:14px; background:rgba(0,0,0,.52); backdrop-filter:blur(2px); }
+.image-crop-dialog { width:min(402px,calc(100vw - 28px)); max-height:calc(100vh - 28px); overflow:hidden; border:1px solid color-mix(in srgb,var(--border) 88%,transparent); border-radius:13px; background:color-mix(in srgb,var(--panel) 96%,#111 4%); color:var(--text); box-shadow:0 24px 70px rgba(0,0,0,.42); }
+.image-crop-header { position:relative; height:52px; display:grid; grid-template-columns:1fr auto 1fr; align-items:center; padding:0 12px; border-bottom:1px solid var(--border); }
+.image-crop-header-left,.image-crop-header-right { display:flex; align-items:center; gap:7px; }
+.image-crop-header-right { justify-content:flex-end; }
+.image-crop-header-title { font-size:14px; font-weight:650; text-align:center; white-space:nowrap; }
+.image-crop-header button { border:0; background:transparent; color:var(--muted); border-radius:6px; height:30px; padding:0 8px; font-size:12px; }
+.image-crop-header button:hover { color:var(--text); background:var(--hover); }
+.image-crop-header .image-crop-save { background:var(--blue); color:#fff; font-weight:650; }
+.image-crop-header .image-crop-save:hover { background:var(--blue-hover); color:#fff; }
+.image-crop-aspect-trigger { display:flex; align-items:center; gap:5px; padding:0 6px !important; }
+.image-crop-aspect-trigger svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+.image-crop-aspect-trigger .ui-chevron { width:12px; height:12px; }
+.image-crop-aspect-menu { position:absolute; top:42px; left:12px; width:154px; padding:5px; border:1px solid var(--border); border-radius:8px; background:var(--panel); box-shadow:var(--shadow); z-index:5; }
+.image-crop-aspect-menu.hidden { display:none; }
+.image-crop-aspect-menu button { width:100%; height:30px; display:flex; align-items:center; justify-content:space-between; padding:0 8px; color:var(--text); text-align:left; }
+.image-crop-aspect-menu button.active::after { content:'✓'; color:var(--blue); }
+.image-crop-stage-wrap { padding:30px; }
+.image-crop-stage { position:relative; height:min(690px,calc(100vh - 130px)); min-height:360px; overflow:hidden; background:#9b9b9b; user-select:none; touch-action:none; }
+.image-crop-stage-image { position:absolute; max-width:100%; max-height:100%; width:auto; height:auto; left:50%; top:50%; transform:translate(-50%,-50%); object-fit:contain; pointer-events:none; -webkit-user-drag:none; }
+.image-crop-frame { position:absolute; z-index:3; border:1px solid rgba(255,255,255,.86); box-shadow:0 0 0 9999px rgba(0,0,0,.38); cursor:move; touch-action:none; }
+.image-crop-frame.circle { border-radius:999px; }
+.image-crop-frame::before { content:''; position:absolute; inset:-1px; pointer-events:none; box-shadow:inset 0 0 0 1px rgba(0,0,0,.26); }
+.image-crop-frame.circle::before { border-radius:999px; }
+.image-crop-handle { position:absolute; z-index:4; display:block; border:0; padding:0; background:transparent; color:#fff; }
+.image-crop-handle.corner { width:20px; height:20px; }
+.image-crop-handle.corner::before { content:''; position:absolute; inset:0; border-color:currentColor; border-style:solid; filter:drop-shadow(0 1px 1px rgba(0,0,0,.65)); }
+.image-crop-handle.nw { left:-4px; top:-4px; cursor:nwse-resize; }
+.image-crop-handle.ne { right:-4px; top:-4px; cursor:nesw-resize; }
+.image-crop-handle.sw { left:-4px; bottom:-4px; cursor:nesw-resize; }
+.image-crop-handle.se { right:-4px; bottom:-4px; cursor:nwse-resize; }
+.image-crop-handle.nw::before { border-width:3px 0 0 3px; border-radius:3px 0 0 0; }
+.image-crop-handle.ne::before { border-width:3px 3px 0 0; border-radius:0 3px 0 0; }
+.image-crop-handle.sw::before { border-width:0 0 3px 3px; border-radius:0 0 0 3px; }
+.image-crop-handle.se::before { border-width:0 3px 3px 0; border-radius:0 0 3px 0; }
+.image-crop-handle.edge { display:grid; place-items:center; }
+.image-crop-handle.edge::before { content:''; display:block; background:#171717; border:1px solid rgba(255,255,255,.92); border-radius:999px; box-shadow:0 1px 2px rgba(0,0,0,.55); }
+.image-crop-handle.n,.image-crop-handle.s { left:50%; width:60px; height:16px; transform:translateX(-50%); cursor:ns-resize; }
+.image-crop-handle.n { top:-8px; }
+.image-crop-handle.s { bottom:-8px; }
+.image-crop-handle.n::before,.image-crop-handle.s::before { width:46px; height:5px; }
+.image-crop-handle.w,.image-crop-handle.e { top:50%; width:16px; height:60px; transform:translateY(-50%); cursor:ew-resize; }
+.image-crop-handle.w { left:-8px; }
+.image-crop-handle.e { right:-8px; }
+.image-crop-handle.w::before,.image-crop-handle.e::before { width:5px; height:46px; }
+.image-crop-stage-hint { position:absolute; left:50%; bottom:10px; transform:translateX(-50%); z-index:5; padding:5px 8px; border-radius:6px; background:rgba(20,20,20,.7); color:#fff; font-size:10px; opacity:0; pointer-events:none; transition:opacity .12s; }
+.image-crop-frame:hover + .image-crop-stage-hint { opacity:1; }
+
 
 .simple-table-block { margin:4px 0 10px; }
 .simple-table-shell { width:100%; min-width:0; position:relative; padding-bottom:25px; }
-.simple-table-scroll { width:100%; overflow-x:auto; border:1px solid var(--border); border-radius:5px 5px 0 0; scrollbar-width:thin; }
+.simple-table-scroll { width:100%; overflow-x:auto; border:1px solid var(--border); border-radius:5px 5px 0 0; scrollbar-width:thin; display:flex; align-items:stretch; }
 .table-menu-section { padding:4px 0; }
 .table-menu-section + .table-menu-section { border-top:1px solid var(--border); }
 .table-menu-label { padding:5px 10px 4px; color:var(--faint); font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
 .block-menu-item .menu-check { display:inline-block; width:15px; color:var(--obsidian-accent); }
 .block-menu-hint { padding:6px 10px 7px; color:var(--muted); font-size:10px; line-height:1.35; }
-.simple-table { width:100%; min-width:448px; border-collapse:collapse; table-layout:fixed; font-size:13px; }
-.simple-table-control-col { width:28px; }
-.simple-table th,.simple-table td { min-width:110px; padding:0; border-right:1px solid var(--border); border-bottom:1px solid var(--border); vertical-align:top; text-align:left; }
-.simple-table .simple-table-row-control,.simple-table .simple-table-corner-control { width:28px; min-width:28px; max-width:28px; padding:0; background:var(--panel); }
-.simple-table .simple-table-row-control { position:sticky; left:0; z-index:2; vertical-align:middle; }
-.simple-table .simple-table-corner-control { position:sticky; left:0; z-index:4; }
-.simple-table-select-all { width:100%; height:100%; min-height:24px; display:grid; place-items:center; border:0; background:transparent; color:var(--faint); padding:0; cursor:default; transition:background .12s,color .12s; }
-.simple-table-select-all:hover,.simple-table-select-all:focus-visible { background:var(--hover); color:var(--text); outline:0; }
-.table-select-all-icon { width:12px; height:12px; display:block; fill:currentColor; opacity:.74; }
-.simple-table-block.table-selected .simple-table-scroll { outline:2px solid color-mix(in srgb,var(--obsidian-accent,var(--blue)) 78%,transparent); outline-offset:1px; }
-.simple-table-block.table-selected .simple-table-cell { background:color-mix(in srgb,var(--obsidian-accent,var(--blue)) 9%,transparent); }
-.simple-table-block.table-selected .simple-table-controls-head th,
-.simple-table-block.table-selected .simple-table-row-control { background:color-mix(in srgb,var(--obsidian-accent,var(--blue)) 13%,var(--panel)); }
-.simple-table-block.table-selected .simple-table-select-all { color:var(--obsidian-accent,var(--blue)); background:color-mix(in srgb,var(--obsidian-accent,var(--blue)) 15%,transparent); }
-.simple-table-cell.cell-range-selected { background:color-mix(in srgb,var(--obsidian-accent,var(--blue)) 16%,transparent); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--obsidian-accent,var(--blue)) 38%,transparent); }
-.simple-table-cell.cell-range-anchor { box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--obsidian-accent,var(--blue)) 78%,transparent); }
-body.table-cell-selecting, body.table-cell-selecting * { user-select:none !important; }
-.simple-table-controls-head th { height:24px; min-height:24px; padding:0; background:color-mix(in srgb,var(--panel) 88%,var(--hover)); vertical-align:middle; }
-.simple-table-controls-head .simple-table-col-control { min-width:110px; text-align:center; }
+.simple-table { flex:1 1 auto; width:auto; min-width:448px; border-collapse:collapse; table-layout:fixed; font-size:13px; }
+.simple-table th,.simple-table td { position:relative; min-width:110px; padding:0; border-right:1px solid var(--border); border-bottom:1px solid var(--border); vertical-align:top; text-align:left; }
 .simple-table tbody tr:last-child > * { border-bottom:0; }
 .simple-table tr > *:last-child { border-right:0; }
 .simple-table tbody th { background:var(--hover); font-weight:600; }
 .simple-table-cell { min-height:33px; padding:7px 9px; outline:0; white-space:pre-wrap; overflow-wrap:anywhere; }
 .simple-table-cell:focus { box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--obsidian-accent) 70%,transparent); }
-.table-axis-handle { width:100%; height:100%; min-height:22px; display:grid; place-items:center; border:0; background:transparent; color:var(--faint); opacity:.28; padding:0; border-radius:3px; transition:opacity .12s,background .12s,color .12s; cursor:grab; }
-.table-axis-handle:hover,.table-axis-handle:focus-visible { opacity:1; background:var(--hover); color:var(--text); outline:0; }
-.table-axis-handle:active { cursor:grabbing; }
-.simple-table-block:hover .table-axis-handle,.simple-table-block:focus-within .table-axis-handle { opacity:.72; }
-.table-axis-handle-icon { width:12px; height:18px; display:block; fill:currentColor; }
+
+/* The table is selected by clicking the physical top-left border corner; no visible selector button is rendered. */
+.simple-table-corner-hit { position:absolute; z-index:12; width:12px; height:12px; left:-6px; top:-6px; background:transparent; cursor:pointer; }
+.simple-table-block.table-selected .simple-table-scroll { outline:2px solid color-mix(in srgb,var(--obsidian-accent,var(--blue)) 78%,transparent); outline-offset:1px; }
+.simple-table-block.table-selected .simple-table-cell { background:color-mix(in srgb,var(--obsidian-accent,var(--blue)) 9%,transparent); }
+.simple-table-cell.cell-range-selected { background:color-mix(in srgb,var(--obsidian-accent,var(--blue)) 16%,transparent); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--obsidian-accent,var(--blue)) 38%,transparent); }
+.simple-table-cell.cell-range-anchor { box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--obsidian-accent,var(--blue)) 78%,transparent); }
+body.table-cell-selecting, body.table-cell-selecting * { user-select:none !important; }
+
+/* Row/column handles live in a shell-level overlay so overflow scrolling never clips them.
+   Cell hover exposes only a short, thicker segment on the corresponding grid border.
+   The full drag/menu handle expands only when the pointer is directly over that segment. */
+.simple-table-handle-layer { position:absolute; inset:0; z-index:10; pointer-events:none; overflow:visible; }
+.table-axis-handle { position:absolute; z-index:8; display:grid; place-items:center; border:0; background:transparent; color:var(--muted); opacity:0; pointer-events:none; padding:0; border-radius:4px; box-shadow:none; cursor:grab; outline:0; }
+/* The real pointer target is intentionally larger than the visible guide line. */
+.table-axis-handle::before,.table-axis-handle::after { content:""; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none; transition:opacity .07s,background .08s,border-color .08s,box-shadow .08s; }
+.table-axis-handle::before { border-radius:999px; background:color-mix(in srgb,var(--muted) 62%,transparent); opacity:0; }
+.table-axis-handle::after { border:1px solid var(--border); border-radius:4px; background:var(--hover); box-shadow:0 1px 2px rgba(0,0,0,.12); opacity:0; }
+.table-axis-handle.hover-visible { opacity:1; pointer-events:auto; }
+.table-axis-handle.hover-visible::before { opacity:1; }
+.table-axis-handle-icon { position:relative; z-index:2; width:10px; height:14px; display:block; fill:currentColor; opacity:0; transition:opacity .07s; pointer-events:none; }
+/* Large invisible hit zones make the thin row/column guides much easier to acquire. */
+.table-col-handle { width:34px; height:18px; transform:translate(-50%,-50%); }
+.table-row-handle { width:18px; height:34px; transform:translate(-50%,-50%); }
+.table-col-handle::before { width:22px; height:3px; }
+.table-row-handle::before { width:3px; height:22px; }
+.table-col-handle::after { width:22px; height:12px; }
+.table-row-handle::after { width:12px; height:22px; }
 .table-col-handle .table-axis-handle-icon { transform:rotate(90deg); }
+.table-axis-handle.hover-visible:hover,.table-axis-handle:focus-visible { color:var(--text); }
+.table-axis-handle.hover-visible:hover::before,.table-axis-handle:focus-visible::before { opacity:0; }
+.table-axis-handle.hover-visible:hover::after,.table-axis-handle:focus-visible::after { opacity:1; }
+.table-axis-handle.hover-visible:hover .table-axis-handle-icon,.table-axis-handle:focus-visible .table-axis-handle-icon { opacity:1; }
+.table-axis-handle:active { cursor:grabbing; }
 .simple-table tbody tr.table-row-dragging > * { opacity:.45; }
 .simple-table tbody tr.table-row-drop-before > * { box-shadow:inset 0 2px 0 var(--obsidian-accent,var(--blue)); }
 .simple-table tbody tr.table-row-drop-after > * { box-shadow:inset 0 -2px 0 var(--obsidian-accent,var(--blue)); }
-.simple-table [data-table-column].table-col-dragging,.simple-table-col-control.table-col-dragging { opacity:.45; }
-.simple-table [data-table-column].table-col-drop-before,.simple-table-col-control.table-col-drop-before { box-shadow:inset 2px 0 0 var(--obsidian-accent,var(--blue)); }
-.simple-table [data-table-column].table-col-drop-after,.simple-table-col-control.table-col-drop-after { box-shadow:inset -2px 0 0 var(--obsidian-accent,var(--blue)); }
+.simple-table [data-table-column].table-col-dragging { opacity:.45; }
+.simple-table [data-table-column].table-col-drop-before { box-shadow:inset 2px 0 0 var(--obsidian-accent,var(--blue)); }
+.simple-table [data-table-column].table-col-drop-after { box-shadow:inset -2px 0 0 var(--obsidian-accent,var(--blue)); }
+
 .simple-table-add-row { position:absolute; left:0; right:0; bottom:0; height:25px; display:grid; place-items:center; padding:0; border:1px solid var(--border); border-top:0; border-radius:0 0 5px 5px; background:transparent; color:var(--muted); font-size:15px; line-height:1; opacity:0; pointer-events:auto; transition:opacity .12s,background .12s,color .12s; }
 .simple-table-add-row:hover,.simple-table-add-row:focus-visible { background:var(--hover); color:var(--text); opacity:1; outline:0; }
-.simple-table-scroll { display:flex; align-items:stretch; }
-.simple-table-scroll > .simple-table { flex:1 1 auto; width:auto; }
-.simple-table-add-column { flex:0 0 0; width:0; min-width:0; align-self:stretch; display:grid; place-items:center; overflow:hidden; border:0; background:transparent; color:var(--muted); font-size:15px; line-height:1; opacity:0; pointer-events:none; padding:0; transition:flex-basis .12s,width .12s,opacity .12s,background .12s,color .12s,border-color .12s; }
-.simple-table-block:hover .simple-table-add-column,.simple-table-block:focus-within .simple-table-add-column { flex-basis:25px; width:25px; min-width:25px; border-left:1px solid var(--border); opacity:1; pointer-events:auto; }
-.simple-table-add-column:hover,.simple-table-add-column:focus-visible { background:var(--hover); color:var(--text); outline:0; }
+.simple-table-add-column { position:absolute; z-index:11; width:25px; min-width:25px; display:grid; place-items:center; border:1px solid transparent; border-left:0; border-radius:0 5px 5px 0; background:transparent; color:var(--muted); font-size:15px; line-height:1; opacity:0; pointer-events:auto; padding:0; outline:0; transition:opacity .12s,background .12s,color .12s,border-color .12s; }
+.simple-table-add-column:hover,.simple-table-add-column:focus-visible { opacity:1; background:var(--hover); color:var(--text); border-color:var(--border); border-left-color:transparent; }
 
 .columns-block { margin:10px 0 18px; }
 .columns-shell { position:relative; width:100%; min-width:0; }
@@ -699,20 +784,20 @@ body { background:var(--ribbon); }
 
 
 /* Unified workspace scrollbars */
-.editor-view, .sidebar-scroll.can-scroll, .right-sidebar-content, .page-meta-menu, .slash-results, .command-results, .emoji-results {
+.editor-view, .sidebar-scroll.can-scroll, .right-sidebar-content, .page-meta-menu, .slash-results, .command-results, .emoji-results, #blockMenu {
   scrollbar-width:thin;
   scrollbar-color:color-mix(in srgb,var(--muted) 46%,transparent) transparent;
 }
 .editor-view::-webkit-scrollbar, .sidebar-scroll.can-scroll::-webkit-scrollbar, .right-sidebar-content::-webkit-scrollbar,
-.page-meta-menu::-webkit-scrollbar, .slash-results::-webkit-scrollbar, .command-results::-webkit-scrollbar, .emoji-results::-webkit-scrollbar { width:10px; height:10px; }
+.page-meta-menu::-webkit-scrollbar, .slash-results::-webkit-scrollbar, .command-results::-webkit-scrollbar, .emoji-results::-webkit-scrollbar, #blockMenu::-webkit-scrollbar { width:10px; height:10px; }
 .editor-view::-webkit-scrollbar-track, .sidebar-scroll.can-scroll::-webkit-scrollbar-track, .right-sidebar-content::-webkit-scrollbar-track,
-.page-meta-menu::-webkit-scrollbar-track, .slash-results::-webkit-scrollbar-track, .command-results::-webkit-scrollbar-track, .emoji-results::-webkit-scrollbar-track { background:transparent; }
+.page-meta-menu::-webkit-scrollbar-track, .slash-results::-webkit-scrollbar-track, .command-results::-webkit-scrollbar-track, .emoji-results::-webkit-scrollbar-track, #blockMenu::-webkit-scrollbar-track { background:transparent; }
 .editor-view::-webkit-scrollbar-thumb, .sidebar-scroll.can-scroll::-webkit-scrollbar-thumb, .right-sidebar-content::-webkit-scrollbar-thumb,
-.page-meta-menu::-webkit-scrollbar-thumb, .slash-results::-webkit-scrollbar-thumb, .command-results::-webkit-scrollbar-thumb, .emoji-results::-webkit-scrollbar-thumb {
+.page-meta-menu::-webkit-scrollbar-thumb, .slash-results::-webkit-scrollbar-thumb, .command-results::-webkit-scrollbar-thumb, .emoji-results::-webkit-scrollbar-thumb, #blockMenu::-webkit-scrollbar-thumb {
   background:color-mix(in srgb,var(--muted) 42%,transparent); border:3px solid transparent; background-clip:padding-box; border-radius:999px;
 }
 .editor-view::-webkit-scrollbar-thumb:hover, .sidebar-scroll.can-scroll::-webkit-scrollbar-thumb:hover, .right-sidebar-content::-webkit-scrollbar-thumb:hover,
-.page-meta-menu::-webkit-scrollbar-thumb:hover, .slash-results::-webkit-scrollbar-thumb:hover, .command-results::-webkit-scrollbar-thumb:hover, .emoji-results::-webkit-scrollbar-thumb:hover {
+.page-meta-menu::-webkit-scrollbar-thumb:hover, .slash-results::-webkit-scrollbar-thumb:hover, .command-results::-webkit-scrollbar-thumb:hover, .emoji-results::-webkit-scrollbar-thumb:hover, #blockMenu::-webkit-scrollbar-thumb:hover {
   background:color-mix(in srgb,var(--muted) 68%,transparent); border:3px solid transparent; background-clip:padding-box;
 }
 
@@ -1142,6 +1227,8 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
   let tableAxisDrag = null;
   let activeImageBlockId = null;
   let activeImageLinkBlockId = null;
+  let activeImageCropBlockId = null;
+  let imageCropSession = null;
   let pageOperationEpoch = 0;
   let multiBlockSelection = null;
   let selectedTableBlockId = null;
@@ -1619,6 +1706,7 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     els.blockEditor.innerHTML = page.blocks.map((b,i) => blockHTML(b,i,page.blocks)).join('');
     els.emptyHint.style.display = 'none';
     scheduleMermaidPreviews();
+    requestAnimationFrame(syncAllSimpleTableHandles);
     if(page.id===state.currentPageId) renderRightSidebar();
   }
 
@@ -1837,9 +1925,6 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     return `<svg class="table-axis-handle-icon" viewBox="0 0 12 18" aria-hidden="true" focusable="false"><circle cx="3.5" cy="3" r="1.25"></circle><circle cx="8.5" cy="3" r="1.25"></circle><circle cx="3.5" cy="9" r="1.25"></circle><circle cx="8.5" cy="9" r="1.25"></circle><circle cx="3.5" cy="15" r="1.25"></circle><circle cx="8.5" cy="15" r="1.25"></circle></svg>`;
   }
 
-  function tableSelectAllSvg(){
-    return `<svg class="table-select-all-icon" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><rect x="1" y="1" width="4" height="4" rx=".7"></rect><rect x="7" y="1" width="4" height="4" rx=".7"></rect><rect x="1" y="7" width="4" height="4" rx=".7"></rect><rect x="7" y="7" width="4" height="4" rx=".7"></rect></svg>`;
-  }
 
   function tableCellSelectionBounds(selection=tableCellSelection){
     if(!selection?.start || !selection?.end) return null;
@@ -1860,14 +1945,100 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
   function simpleTableHTML(block,gutter){
     normalizeSimpleTableBlock(block);
     const rows=block.tableRows, colCount=rows[0]?.length||1, selected=selectedTableBlockId===block.id;
-    const columnControls=Array.from({length:colCount},(_,ci)=>`<th class="simple-table-col-control" scope="col" data-table-col-control="${ci}"><button type="button" class="table-axis-handle table-col-handle" draggable="true" data-table-col-menu="${ci}" title="Drag to reorder · click for column options" aria-label="Column ${ci+1}: drag to reorder or click for options">${tableAxisHandleSvg()}</button></th>`).join('');
-    const body=rows.map((row,ri)=>`<tr data-table-row="${ri}"><td class="simple-table-row-control"><button type="button" class="table-axis-handle table-row-handle" draggable="true" data-table-row-menu="${ri}" title="Drag to reorder · click for row options" aria-label="Row ${ri+1}: drag to reorder or click for options">${tableAxisHandleSvg()}</button></td>${row.map((cell,ci)=>{
+    const body=rows.map((row,ri)=>`<tr data-table-row="${ri}">${row.map((cell,ci)=>{
       const header=(block.tableHeaderRow&&ri===0)||(block.tableHeaderColumn&&ci===0);
       const tag=header?'th':'td';
       const rangeSelected=isTableCellInSelection(block.id,ri,ci), rangeAnchor=rangeSelected && tableCellSelection?.start?.row===ri && tableCellSelection?.start?.col===ci;
       return `<${tag} data-table-column="${ci}"><div class="simple-table-cell${rangeSelected?' cell-range-selected':''}${rangeAnchor?' cell-range-anchor':''}" contenteditable="true" spellcheck="true" data-table-cell="${ri}:${ci}">${escapeHtml(cell)}</div></${tag}>`;
     }).join('')}</tr>`).join('');
-    return `<div class="block-row simple-table-block${selected?' table-selected':''}" data-block-id="${block.id}" data-type="table">${gutter}<div class="simple-table-shell"><div class="simple-table-scroll"><table class="simple-table"><colgroup><col class="simple-table-control-col">${Array.from({length:colCount},()=>'<col>').join('')}</colgroup><thead class="simple-table-controls-head"><tr><th class="simple-table-corner-control"><button type="button" class="simple-table-select-all" data-table-select title="Select table" aria-label="Select entire table" aria-pressed="${selected?'true':'false'}">${tableSelectAllSvg()}</button></th>${columnControls}</tr></thead><tbody>${body}</tbody></table><button type="button" class="simple-table-add-column" data-table-add-col title="Add column" aria-label="Add column">＋</button></div><button type="button" class="simple-table-add-row" data-table-add-row title="Add row" aria-label="Add row">＋</button></div></div>`;
+    const colHandles=Array.from({length:colCount},(_,ci)=>`<button type="button" class="table-axis-handle table-col-handle" draggable="true" data-table-col-menu="${ci}" title="Drag to reorder · click for column options" aria-label="Column ${ci+1}: drag to reorder or click for options">${tableAxisHandleSvg()}</button>`).join('');
+    const rowHandles=rows.map((_,ri)=>`<button type="button" class="table-axis-handle table-row-handle" draggable="true" data-table-row-menu="${ri}" title="Drag to reorder · click for row options" aria-label="Row ${ri+1}: drag to reorder or click for options">${tableAxisHandleSvg()}</button>`).join('');
+    return `<div class="block-row simple-table-block${selected?' table-selected':''}" data-block-id="${block.id}" data-type="table">${gutter}<div class="simple-table-shell"><span class="simple-table-corner-hit" data-table-corner-select title="Select table" aria-label="Select entire table"></span><div class="simple-table-handle-layer" aria-hidden="false">${colHandles}${rowHandles}</div><div class="simple-table-scroll"><table class="simple-table"><colgroup>${Array.from({length:colCount},()=>'<col>').join('')}</colgroup><tbody>${body}</tbody></table></div><button type="button" class="simple-table-add-column" data-table-add-col title="Add column" aria-label="Add column">＋</button><button type="button" class="simple-table-add-row" data-table-add-row title="Add row" aria-label="Add row">＋</button></div></div>`;
+  }
+
+  let simpleTableHandleHover={blockId:null,row:null,col:null};
+
+  function syncSimpleTableHandles(tableBlock){
+    if(!tableBlock?.isConnected) return;
+    const shell=tableBlock.querySelector('.simple-table-shell');
+    const scroll=tableBlock.querySelector('.simple-table-scroll');
+    if(!shell||!scroll) return;
+    const shellRect=shell.getBoundingClientRect();
+    const scrollRect=scroll.getBoundingClientRect();
+    const firstRow=tableBlock.querySelector('tr[data-table-row="0"]');
+    const cells=firstRow?[...firstRow.querySelectorAll('[data-table-column]')]:[];
+    cells.forEach(cell=>{
+      const ci=Number(cell.dataset.tableColumn), handle=tableBlock.querySelector(`[data-table-col-menu="${ci}"]`);
+      if(!handle) return;
+      const rect=cell.getBoundingClientRect();
+      const centerX=rect.left+rect.width/2-shellRect.left;
+      const topLine=scrollRect.top-shellRect.top;
+      handle.style.left=`${centerX}px`;
+      handle.style.top=`${topLine}px`;
+      const visible=rect.right>scrollRect.left+1 && rect.left<scrollRect.right-1;
+      handle.style.visibility=visible?'visible':'hidden';
+    });
+    tableBlock.querySelectorAll('tr[data-table-row]').forEach(row=>{
+      const ri=Number(row.dataset.tableRow), handle=tableBlock.querySelector(`[data-table-row-menu="${ri}"]`);
+      const firstCell=row.querySelector('[data-table-column]');
+      if(!handle||!firstCell) return;
+      const rect=firstCell.getBoundingClientRect();
+      const leftLine=scrollRect.left-shellRect.left;
+      const centerY=rect.top+rect.height/2-shellRect.top;
+      handle.style.left=`${leftLine}px`;
+      handle.style.top=`${centerY}px`;
+      const visible=rect.bottom>scrollRect.top+1 && rect.top<scrollRect.bottom-1;
+      handle.style.visibility=visible?'visible':'hidden';
+    });
+    const addColumn=tableBlock.querySelector('[data-table-add-col]');
+    const table=tableBlock.querySelector('.simple-table');
+    if(addColumn&&table){
+      const tableRect=table.getBoundingClientRect();
+      addColumn.style.left=`${tableRect.right-shellRect.left}px`;
+      addColumn.style.top=`${scrollRect.top-shellRect.top}px`;
+      addColumn.style.height=`${scrollRect.height}px`;
+      const rightEdgeVisible=tableRect.right>=scrollRect.left-1 && tableRect.right<=scrollRect.right+1;
+      addColumn.style.visibility=rightEdgeVisible?'visible':'hidden';
+    }
+  }
+
+  function syncAllSimpleTableHandles(){
+    document.querySelectorAll('.simple-table-block[data-block-id]').forEach(syncSimpleTableHandles);
+  }
+
+  function setSimpleTableHandleHover(tableBlock,row=null,col=null){
+    if(!tableBlock){
+      document.querySelectorAll('.table-axis-handle.hover-visible').forEach(el=>el.classList.remove('hover-visible'));
+      simpleTableHandleHover={blockId:null,row:null,col:null};
+      return;
+    }
+    const blockId=tableBlock.dataset.blockId||null;
+    if(simpleTableHandleHover.blockId===blockId && simpleTableHandleHover.row===row && simpleTableHandleHover.col===col) return;
+    document.querySelectorAll('.table-axis-handle.hover-visible').forEach(el=>el.classList.remove('hover-visible'));
+    if(Number.isInteger(row)) tableBlock.querySelector(`[data-table-row-menu="${row}"]`)?.classList.add('hover-visible');
+    if(Number.isInteger(col)) tableBlock.querySelector(`[data-table-col-menu="${col}"]`)?.classList.add('hover-visible');
+    simpleTableHandleHover={blockId,row,col};
+  }
+
+  function onSimpleTableHandlePointerMove(e){
+    const handle=e.target.closest?.('.table-axis-handle');
+    if(handle){
+      const tableBlock=handle.closest('.simple-table-block[data-block-id]');
+      const row=handle.dataset.tableRowMenu!==undefined?Number(handle.dataset.tableRowMenu):null;
+      const col=handle.dataset.tableColMenu!==undefined?Number(handle.dataset.tableColMenu):null;
+      setSimpleTableHandleHover(tableBlock,Number.isInteger(row)?row:null,Number.isInteger(col)?col:null);
+      return;
+    }
+    const cell=e.target.closest?.('[data-table-cell]');
+    if(cell){
+      const tableBlock=cell.closest('.simple-table-block[data-block-id]');
+      const pos=tableCellCoordinates(cell);
+      setSimpleTableHandleHover(tableBlock,pos?.row??null,pos?.col??null);
+      return;
+    }
+    const tableBlock=e.target.closest?.('.simple-table-block[data-block-id]');
+    if(tableBlock){ setSimpleTableHandleHover(tableBlock,null,null); return; }
+    setSimpleTableHandleHover(null);
   }
 
   function tableCellCoordinates(cell){
@@ -2080,7 +2251,6 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     if(!selectedTableBlockId) return;
     const row=document.querySelector(`.simple-table-block[data-block-id="${selectedTableBlockId}"]`);
     row?.classList.remove('table-selected');
-    row?.querySelector('[data-table-select]')?.setAttribute('aria-pressed','false');
     selectedTableBlockId=null;
   }
 
@@ -2093,9 +2263,6 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     try{ window.getSelection()?.removeAllRanges(); }catch{}
     const row=document.querySelector(`.simple-table-block[data-block-id="${id}"]`);
     row?.classList.add('table-selected');
-    const button=row?.querySelector('[data-table-select]');
-    button?.setAttribute('aria-pressed','true');
-    button?.focus({preventScroll:true});
     return true;
   }
 
@@ -2464,13 +2631,269 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     return `<div class="image-url-editor" data-image-url-editor><div class="image-url-row"><input class="image-url-input" data-image-url-input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/image.jpg" value="${escapeHtml(current)}"><button class="image-url-submit" data-image-url-submit>Embed</button><button class="image-url-cancel" data-image-url-cancel>Cancel</button></div><div class="image-url-help">Paste a direct, public image URL. The image is tested before it is saved.</div><div class="image-url-error" data-image-url-error></div></div>`;
   }
 
+  function imageToolIcon(type){
+    if(type==='align') return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14"/><path d="M5 12h10"/><path d="M5 17h14"/></svg>`;
+    if(type==='caption') return `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M7 20h10"/></svg>`;
+    if(type==='crop') return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v14a2 2 0 0 0 2 2h12"/><path d="M3 7h14a2 2 0 0 1 2 2v12"/></svg>`;
+    if(type==='download') return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 20h14"/></svg>`;
+    if(type==='left') return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5v14"/><rect x="8" y="7" width="10" height="10" rx="1"/></svg>`;
+    if(type==='right') return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 5v14"/><rect x="6" y="7" width="10" height="10" rx="1"/></svg>`;
+    return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5v14"/><path d="M20 5v14"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>`;
+  }
+
+  function imageDisplayWidth(block){
+    const value=Number(block.imageWidth);
+    return Number.isFinite(value) && value>80 ? Math.round(value) : null;
+  }
+
+  function imageAlignment(block){
+    return ['left','center','right'].includes(block.imageAlign)?block.imageAlign:'center';
+  }
+
+  function normalizedImageCrop(block){
+    const raw=block.imageCrop&&typeof block.imageCrop==='object'?block.imageCrop:{};
+    const originalAspect=Math.max(.2,Math.min(5,Number(raw.originalAspect)||1));
+    const shape=raw.shape==='circle'?'circle':'rect';
+    const aspectRaw=shape==='circle'?1:(Number(raw.aspect)||originalAspect);
+    return {
+      enabled:!!raw.enabled,
+      shape,
+      aspect:Math.max(.2,Math.min(5,aspectRaw)),
+      originalAspect,
+      zoom:Math.max(1,Math.min(3,Number(raw.zoom)||1)),
+      x:Math.max(0,Math.min(100,Number.isFinite(Number(raw.x))?Number(raw.x):50)),
+      y:Math.max(0,Math.min(100,Number.isFinite(Number(raw.y))?Number(raw.y):50))
+    };
+  }
+
+  async function downloadImageBlock(id){
+    const b=findBlock(id); if(!b?.src) return;
+    const fallback=()=>{ const a=document.createElement('a'); a.href=b.src; a.target='_blank'; a.rel='noopener noreferrer'; a.download='image'; document.body.appendChild(a); a.click(); a.remove(); };
+    try{
+      const response=await fetch(b.src); if(!response.ok) throw new Error('download');
+      const blob=await response.blob();
+      const url=URL.createObjectURL(blob); const a=document.createElement('a');
+      const ext=(blob.type.split('/')[1]||'png').replace('jpeg','jpg').split('+')[0];
+      a.href=url; a.download=`image.${ext}`; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }catch{ fallback(); }
+  }
+
+  function setImageAlignment(id,align){
+    if(!['left','center','right'].includes(align)) return;
+    const b=findBlock(id); if(!b) return;
+    b.imageAlign=align; scheduleSave();
+    const row=document.querySelector(`.block-row[data-block-id="${id}"]`);
+    const figure=row?.querySelector('.image-figure');
+    if(figure){ figure.classList.remove('align-left','align-center','align-right'); figure.classList.add(`align-${align}`); }
+    row?.querySelector('[data-image-align-menu]')?.classList.add('hidden');
+    row?.querySelectorAll('[data-image-align-choice]').forEach(btn=>btn.classList.toggle('active',btn.dataset.imageAlignChoice===align));
+  }
+
+  function toggleImageCaption(id){
+    const b=findBlock(id); if(!b) return;
+    const wasVisible=b.showCaption!==false && (b.showCaption===true || !!String(b.caption||''));
+    b.showCaption=!wasVisible;
+    scheduleSave(); renderBlocks(currentPage());
+    if(!wasVisible) requestAnimationFrame(()=>{ const cap=document.querySelector(`.block-row[data-block-id="${id}"] [data-image-caption]`); cap?.focus(); });
+  }
+
+  function openImageCrop(id){
+    const b=findBlock(id); if(!b) return;
+    const row=document.querySelector(`.block-row[data-block-id="${id}"]`);
+    const source=row?.querySelector('.image-preview img');
+    const rect=source?.getBoundingClientRect();
+    const current=b.imageCrop&&typeof b.imageCrop==='object'?JSON.parse(JSON.stringify(b.imageCrop)):null;
+    const naturalAspect=source?.naturalWidth&&source?.naturalHeight?source.naturalWidth/source.naturalHeight:0;
+    const derivedAspect=naturalAspect || (rect?.height>0?rect.width/rect.height:1);
+    imageCropSession={id,original:current};
+    const crop=normalizedImageCrop(b);
+    if(!crop.enabled) b.imageCrop={enabled:true,originalAspect:derivedAspect,aspect:derivedAspect,zoom:1,x:50,y:50};
+    else b.imageCrop={...crop,originalAspect:crop.originalAspect||derivedAspect,enabled:true};
+    activeImageCropBlockId=id;
+    renderBlocks(currentPage());
+    scheduleImageCropDialogLayout(id);
+  }
+
+  function applyImageCropPreview(row,block){
+    const crop=normalizedImageCrop(block), preview=row?.querySelector('.image-preview'), img=preview?.querySelector('img');
+    if(!preview||!img) return;
+    preview.classList.toggle('crop-active',crop.enabled);
+    preview.classList.toggle('crop-circle',crop.enabled && crop.shape==='circle');
+    if(crop.enabled){
+      preview.style.aspectRatio=String(crop.aspect);
+      preview.style.borderRadius=crop.shape==='circle'?'50%':'4px';
+      preview.style.clipPath=crop.shape==='circle'?'circle(50% at 50% 50%)':'none';
+      preview.style.webkitClipPath=crop.shape==='circle'?'circle(50% at 50% 50%)':'none';
+      img.style.borderRadius=crop.shape==='circle'?'50%':'4px';
+      img.style.objectPosition=`${crop.x}% ${crop.y}%`;
+      img.style.transform=`scale(${crop.zoom})`;
+    }else{
+      preview.style.removeProperty('aspect-ratio'); preview.style.removeProperty('border-radius'); preview.style.removeProperty('clip-path'); preview.style.removeProperty('-webkit-clip-path');
+      img.style.removeProperty('border-radius'); img.style.removeProperty('object-position'); img.style.removeProperty('transform');
+    }
+    row.querySelector('[data-image-crop-zoom-value]')?.replaceChildren(document.createTextNode(`${crop.zoom.toFixed(1)}×`));
+    row.querySelector('[data-image-crop-x-value]')?.replaceChildren(document.createTextNode(`${Math.round(crop.x)}%`));
+    row.querySelector('[data-image-crop-y-value]')?.replaceChildren(document.createTextNode(`${Math.round(crop.y)}%`));
+  }
+
+  function updateImageCropControl(input){
+    const row=input.closest('.image-block'), b=findBlock(row?.dataset.blockId); if(!b) return;
+    const crop=normalizedImageCrop(b);
+    if(input.matches('[data-image-crop-zoom]')) crop.zoom=Number(input.value);
+    if(input.matches('[data-image-crop-x]')) crop.x=Number(input.value);
+    if(input.matches('[data-image-crop-y]')) crop.y=Number(input.value);
+    b.imageCrop={...crop,enabled:true};
+    applyImageCropPreview(row,b);
+  }
+
+  function setImageCropAspect(id,ratio){
+    const b=findBlock(id); if(!b) return;
+    const crop=normalizedImageCrop(b);
+    let next=crop.aspect, shape='rect';
+    if(ratio==='original') next=crop.originalAspect;
+    else if(ratio==='circle'){ next=1; shape='circle'; }
+    else next=Number(ratio);
+    if(!Number.isFinite(next)||next<=0) return;
+    b.imageCrop={...crop,enabled:true,shape,aspect:next};
+    const row=document.querySelector(`.block-row[data-block-id="${id}"]`); applyImageCropPreview(row,b);
+    row?.querySelectorAll('[data-image-crop-aspect]').forEach(btn=>{
+      const value=btn.dataset.imageCropAspect;
+      const isActive=value==='circle' ? shape==='circle' : (shape!=='circle' && Math.abs((value==='original'?crop.originalAspect:Number(value))-next)<.01);
+      btn.classList.toggle('active',isActive);
+    });
+    row?.querySelector('[data-image-crop-aspect-menu]')?.classList.add('hidden');
+    scheduleImageCropDialogLayout(id);
+  }
+
+  function scheduleImageCropDialogLayout(id){
+    requestAnimationFrame(()=>{
+      const row=document.querySelector(`.block-row[data-block-id="${id}"]`);
+      const img=row?.querySelector('[data-image-crop-source]');
+      if(!img) return;
+      const draw=()=>layoutImageCropDialog(id);
+      if(img.complete && img.naturalWidth) draw(); else img.addEventListener('load',draw,{once:true});
+    });
+  }
+
+  function cropDialogGeometry(id){
+    const row=document.querySelector(`.block-row[data-block-id="${id}"]`);
+    const stage=row?.querySelector('[data-image-crop-stage]'), img=row?.querySelector('[data-image-crop-source]'), frame=row?.querySelector('[data-image-crop-frame]');
+    if(!stage||!img||!frame) return null;
+    const sr=stage.getBoundingClientRect(), ir=img.getBoundingClientRect(), fr=frame.getBoundingClientRect();
+    return {row,stage,img,frame,sr,ir,fr,imgLeft:ir.left-sr.left,imgTop:ir.top-sr.top};
+  }
+
+  function cropMaxFit(imageWidth,imageHeight,aspect){
+    let width=imageWidth, height=width/aspect;
+    if(height>imageHeight){ height=imageHeight; width=height*aspect; }
+    return {width,height};
+  }
+
+  function layoutImageCropDialog(id){
+    const b=findBlock(id), g=cropDialogGeometry(id); if(!b||!g) return;
+    const crop=normalizedImageCrop(b), max=cropMaxFit(g.ir.width,g.ir.height,crop.aspect);
+    const width=Math.max(56,max.width/crop.zoom), height=Math.max(56,max.height/crop.zoom);
+    const travelX=Math.max(0,g.ir.width-width), travelY=Math.max(0,g.ir.height-height);
+    const left=g.imgLeft+travelX*(crop.x/100), top=g.imgTop+travelY*(crop.y/100);
+    Object.assign(g.frame.style,{left:`${left}px`,top:`${top}px`,width:`${Math.min(width,g.ir.width)}px`,height:`${Math.min(height,g.ir.height)}px`});
+    g.frame.classList.toggle('circle', crop.shape==='circle');
+  }
+
+  function updateCropFromDialogFrame(id,left,top,width,height,g){
+    const b=findBlock(id); if(!b) return;
+    const aspect=Math.max(.2,Math.min(5,width/Math.max(1,height)));
+    const max=cropMaxFit(g.ir.width,g.ir.height,aspect);
+    const zoom=Math.max(1,Math.min(3,max.width/Math.max(1,width)));
+    const actualWidth=max.width/zoom, actualHeight=max.height/zoom;
+    const travelX=Math.max(0,g.ir.width-actualWidth), travelY=Math.max(0,g.ir.height-actualHeight);
+    const x=travelX?((left-g.imgLeft)/travelX)*100:50;
+    const y=travelY?((top-g.imgTop)/travelY)*100:50;
+    const base=normalizedImageCrop(b);
+    b.imageCrop={...base,enabled:true,aspect,zoom,x:Math.max(0,Math.min(100,x)),y:Math.max(0,Math.min(100,y))};
+    layoutImageCropDialog(id);
+  }
+
+  function startImageCropFrameMove(frame,id,event){
+    const g=cropDialogGeometry(id); if(!g) return;
+    event.preventDefault(); event.stopPropagation();
+    const startX=event.clientX,startY=event.clientY;
+    const startLeft=g.fr.left-g.sr.left,startTop=g.fr.top-g.sr.top,width=g.fr.width,height=g.fr.height;
+    const minLeft=g.imgLeft,maxLeft=g.imgLeft+g.ir.width-width,minTop=g.imgTop,maxTop=g.imgTop+g.ir.height-height;
+    const move=ev=>{
+      const left=Math.max(minLeft,Math.min(maxLeft,startLeft+ev.clientX-startX));
+      const top=Math.max(minTop,Math.min(maxTop,startTop+ev.clientY-startY));
+      g.frame.style.left=`${left}px`; g.frame.style.top=`${top}px`;
+      updateCropFromDialogFrame(id,left,top,width,height,g);
+    };
+    const up=()=>{ window.removeEventListener('mousemove',move,true); window.removeEventListener('mouseup',up,true); };
+    window.addEventListener('mousemove',move,true); window.addEventListener('mouseup',up,true);
+  }
+
+  function startImageCropFrameResize(handle,id,event){
+    const g=cropDialogGeometry(id); if(!g) return;
+    event.preventDefault(); event.stopPropagation();
+    const dir=handle.dataset.imageCropHandle||'', startX=event.clientX,startY=event.clientY;
+    const base={left:g.fr.left-g.sr.left,top:g.fr.top-g.sr.top,right:g.fr.right-g.sr.left,bottom:g.fr.bottom-g.sr.top};
+    const bounds={left:g.imgLeft,top:g.imgTop,right:g.imgLeft+g.ir.width,bottom:g.imgTop+g.ir.height};
+    const minSize=56;
+    const move=ev=>{
+      const dx=ev.clientX-startX,dy=ev.clientY-startY; let {left,top,right,bottom}=base;
+      if(dir.includes('w')) left=Math.max(bounds.left,Math.min(right-minSize,base.left+dx));
+      if(dir.includes('e')) right=Math.min(bounds.right,Math.max(left+minSize,base.right+dx));
+      if(dir.includes('n')) top=Math.max(bounds.top,Math.min(bottom-minSize,base.top+dy));
+      if(dir.includes('s')) bottom=Math.min(bounds.bottom,Math.max(top+minSize,base.bottom+dy));
+      updateCropFromDialogFrame(id,left,top,right-left,bottom-top,g);
+    };
+    const up=()=>{ window.removeEventListener('mousemove',move,true); window.removeEventListener('mouseup',up,true); };
+    window.addEventListener('mousemove',move,true); window.addEventListener('mouseup',up,true);
+  }
+
+  function resetImageCrop(id){
+    const b=findBlock(id); if(!b) return;
+    const crop=normalizedImageCrop(b);
+    b.imageCrop={...crop,enabled:true,aspect:crop.originalAspect,zoom:1,x:50,y:50};
+    renderBlocks(currentPage());
+  }
+
+  function applyImageCrop(id){
+    if(activeImageCropBlockId!==id) return;
+    activeImageCropBlockId=null; imageCropSession=null; scheduleSave(); renderBlocks(currentPage());
+  }
+
+  function cancelImageCrop(id){
+    const b=findBlock(id); if(!b) return;
+    if(imageCropSession?.id===id){
+      if(imageCropSession.original) b.imageCrop=imageCropSession.original; else delete b.imageCrop;
+    }
+    activeImageCropBlockId=null; imageCropSession=null; renderBlocks(currentPage());
+  }
+
+  function imageCropPanelHTML(block){
+    if(activeImageCropBlockId!==block.id) return '';
+    const crop=normalizedImageCrop(block);
+    const active=(ratio)=>Math.abs(crop.aspect-ratio)<.01?' active':'';
+    return `<div class="image-crop-backdrop" data-image-crop-backdrop><div class="image-crop-dialog" data-image-crop-dialog><div class="image-crop-header"><div class="image-crop-header-left"><button class="image-crop-aspect-trigger" data-image-crop-aspect-toggle title="Aspect ratio"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="11" height="11" rx="1.5"/><rect x="9" y="8" width="11" height="11" rx="1.5"/></svg>${chevronSvg()}</button><div class="image-crop-aspect-menu hidden" data-image-crop-aspect-menu><button data-image-crop-aspect="original" class="${crop.shape!=='circle' && Math.abs(crop.aspect-crop.originalAspect)<.01?'active':''}">Original</button><button data-image-crop-aspect="1" class="${crop.shape!=='circle' ? active(1) : ''}">Square</button><button data-image-crop-aspect="circle" class="${crop.shape==='circle'?'active':''}">Circle</button><button data-image-crop-aspect="1.333333" class="${crop.shape!=='circle' ? active(1.333333) : ''}">4:3</button><button data-image-crop-aspect="1.777778" class="${crop.shape!=='circle' ? active(1.777778) : ''}">16:9</button></div></div><div class="image-crop-header-title">Crop image</div><div class="image-crop-header-right"><button data-image-crop-cancel>Cancel</button><button class="image-crop-save" data-image-crop-apply>Save</button></div></div><div class="image-crop-stage-wrap"><div class="image-crop-stage" data-image-crop-stage><img class="image-crop-stage-image" data-image-crop-source src="${escapeHtml(block.src)}" alt=""><div class="image-crop-frame" data-image-crop-frame><button class="image-crop-handle corner nw" data-image-crop-handle="nw" aria-label="Resize crop"></button><button class="image-crop-handle edge n" data-image-crop-handle="n" aria-label="Resize crop"></button><button class="image-crop-handle corner ne" data-image-crop-handle="ne" aria-label="Resize crop"></button><button class="image-crop-handle edge e" data-image-crop-handle="e" aria-label="Resize crop"></button><button class="image-crop-handle corner se" data-image-crop-handle="se" aria-label="Resize crop"></button><button class="image-crop-handle edge s" data-image-crop-handle="s" aria-label="Resize crop"></button><button class="image-crop-handle corner sw" data-image-crop-handle="sw" aria-label="Resize crop"></button><button class="image-crop-handle edge w" data-image-crop-handle="w" aria-label="Resize crop"></button></div><div class="image-crop-stage-hint">Drag to reposition</div></div></div></div></div>`;
+  }
+
   function imageHTML(block, gutter){
     const caption=escapeHtml(block.caption||'');
     const linkEditor=imageLinkEditorHTML(block);
     if(!block.src){
       return `<div class="block-row image-block" data-block-id="${block.id}" data-type="image">${gutter}<div class="image-block-body"><div class="image-empty"><div class="image-empty-icon">🖼️</div><div class="image-empty-copy"><div class="image-empty-title">Add an image</div><div class="image-empty-sub">Upload from your device or embed with a link.</div></div><div class="image-buttons"><button class="image-action-btn" data-image-upload>Upload</button><button class="image-action-btn" data-image-url>Embed link</button></div></div>${linkEditor}</div></div>`;
     }
-    return `<div class="block-row image-block" data-block-id="${block.id}" data-type="image">${gutter}<div class="image-block-body"><figure class="image-figure"><div class="image-preview"><img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt||block.caption||'Image')}" loading="lazy" decoding="async"><div class="image-toolbar"><button data-image-upload>Replace</button><button data-image-url>Link</button><button data-image-remove>Remove</button></div></div>${linkEditor}<figcaption class="image-caption" contenteditable="true" data-image-caption data-placeholder="Write a caption…">${caption}</figcaption></figure></div></div>`;
+    const width=imageDisplayWidth(block), align=imageAlignment(block), crop=normalizedImageCrop(block);
+    const widthStyle=width?` style="width:${width}px"`:'';
+    const cropClass=crop.enabled?` crop-active${crop.shape==='circle'?' crop-circle':''}`:'';
+    const previewStyle=crop.enabled
+      ?` style="aspect-ratio:${crop.aspect};${crop.shape==='circle'?'border-radius:50%;clip-path:circle(50% at 50% 50%);-webkit-clip-path:circle(50% at 50% 50%);':''}"`
+      :'';
+    const imgStyle=crop.enabled
+      ?` style="object-position:${crop.x}% ${crop.y}%;transform:scale(${crop.zoom});${crop.shape==='circle'?'border-radius:50%;':''}"`
+      :'';
+    const captionVisible=block.showCaption!==false && (block.showCaption===true || !!String(block.caption||''));
+    const cropOpen=activeImageCropBlockId===block.id;
+    return `<div class="block-row image-block" data-block-id="${block.id}" data-type="image">${gutter}<div class="image-block-body"><figure class="image-figure align-${align}"><div class="image-preview-shell${cropOpen?' image-ui-open':''}"${widthStyle}><div class="image-toolbar"><button class="image-tool-btn" data-image-align title="Alignment">${imageToolIcon('align')}</button><button class="image-tool-btn${captionVisible?' active':''}" data-image-caption-toggle title="Caption">${imageToolIcon('caption')}</button><button class="image-tool-btn${crop.enabled?' active':''}" data-image-crop title="Crop">${imageToolIcon('crop')}</button><div class="image-toolbar-sep"></div><button class="image-tool-btn" data-image-download title="Download">${imageToolIcon('download')}</button></div><div class="image-align-toolbar hidden" data-image-align-menu><button class="image-tool-btn${align==='left'?' active':''}" data-image-align-choice="left" title="Align left">${imageToolIcon('left')}</button><button class="image-tool-btn${align==='center'?' active':''}" data-image-align-choice="center" title="Align center">${imageToolIcon('center')}</button><button class="image-tool-btn${align==='right'?' active':''}" data-image-align-choice="right" title="Align right">${imageToolIcon('right')}</button></div>${imageCropPanelHTML(block)}<button class="image-resize-handle left" data-image-resize="left" aria-label="Resize image"></button><div class="image-preview${cropClass}"${previewStyle}><img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt||block.caption||'Image')}" loading="lazy" decoding="async"${imgStyle}></div><button class="image-resize-handle right" data-image-resize="right" aria-label="Resize image"></button>${captionVisible?`<figcaption class="image-caption" contenteditable="true" data-image-caption data-placeholder="Write a caption…">${caption}</figcaption>`:''}</div>${linkEditor}</figure></div></div>`;
   }
 
   function databaseHTML(block){
@@ -2538,6 +2961,7 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     document.addEventListener('auxclick', onAuxClick);
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('pointerdown', onPaneResizeStart);
+    document.addEventListener('pointermove', onSimpleTableHandlePointerMove, true);
     document.addEventListener('input', onInput);
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('change', onChange);
@@ -2550,8 +2974,8 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     document.addEventListener('cut', onCut);
     document.addEventListener('beforeinput', onBeforeInput);
     document.addEventListener('dragend', clearDragState);
-    document.addEventListener('scroll', e=>{ if(e.target?.matches?.('[data-code-editor]')) syncCodeScroll(e.target); if(multiBlockSelection?.active) renderMultiBlockSelection(); }, true);
-    window.addEventListener('resize', ()=>{ hideFloatingMenus(); updateSidebarOverflow(); if(multiBlockSelection?.active) renderMultiBlockSelection(); });
+    document.addEventListener('scroll', e=>{ if(e.target?.matches?.('[data-code-editor]')) syncCodeScroll(e.target); if(e.target?.matches?.('.simple-table-scroll')) syncSimpleTableHandles(e.target.closest('.simple-table-block')); if(multiBlockSelection?.active) renderMultiBlockSelection(); }, true);
+    window.addEventListener('resize', ()=>{ hideFloatingMenus(); updateSidebarOverflow(); syncAllSimpleTableHandles(); if(multiBlockSelection?.active) renderMultiBlockSelection(); if(activeImageCropBlockId) scheduleImageCropDialogLayout(activeImageCropBlockId); });
   }
 
   function onPaneResizeStart(e){
@@ -2654,7 +3078,7 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
       if(e.target.closest('[data-mermaid-preview-toggle]')){ const b=findBlock(id); if(b?.language==='mermaid'){ b.mermaidPreview=b.mermaidPreview===false; scheduleSave(); renderBlocks(currentPage()); focusCodeBlock(id); } return; }
       if(e.target.closest('[data-code-wrap]')){ const b=findBlock(id); if(b){ b.codeWrap=!b.codeWrap; scheduleSave(); renderBlocks(currentPage()); focusCodeBlock(id); } return; }
       if(e.target.closest('[data-code-more]')){ showCodeOptions(blockRow,id); return; }
-      if(e.target.closest('[data-table-select]')){ selectSimpleTable(id); return; }
+      if(e.target.closest('[data-table-corner-select]')){ selectSimpleTable(id); return; }
       const rowMenu=e.target.closest('[data-table-row-menu]');
       if(rowMenu){ showSimpleTableAxisMenu(rowMenu,id,'row',Number(rowMenu.dataset.tableRowMenu)); return; }
       const colMenu=e.target.closest('[data-table-col-menu]');
@@ -2669,7 +3093,20 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
       if(e.target.closest('[data-image-url]')){ openImageUrlEditor(id); return; }
       if(e.target.closest('[data-image-url-submit]')){ commitImageUrl(id, blockRow.querySelector('[data-image-url-input]')); return; }
       if(e.target.closest('[data-image-url-cancel]')){ activeImageLinkBlockId=null; renderBlocks(currentPage()); return; }
-      if(e.target.closest('[data-image-remove]')){ const b=findBlock(id); if(b){ b.src=''; b.alt=''; scheduleSave(); renderBlocks(currentPage()); } return; }
+      if(e.target.closest('[data-image-remove]')){ const b=findBlock(id); if(b){ b.src=''; b.alt=''; delete b.imageWidth; scheduleSave(); renderBlocks(currentPage()); } return; }
+      const imageAlignChoice=e.target.closest('[data-image-align-choice]');
+      if(imageAlignChoice){ setImageAlignment(id,imageAlignChoice.dataset.imageAlignChoice); return; }
+      if(e.target.closest('[data-image-align]')){ const menu=blockRow.querySelector('[data-image-align-menu]'); menu?.classList.toggle('hidden'); return; }
+      if(e.target.closest('[data-image-caption-toggle]')){ toggleImageCaption(id); return; }
+      if(e.target.closest('[data-image-crop]')){ if(activeImageCropBlockId===id) cancelImageCrop(id); else openImageCrop(id); return; }
+      if(e.target.closest('[data-image-crop-aspect-toggle]')){ blockRow.querySelector('[data-image-crop-aspect-menu]')?.classList.toggle('hidden'); return; }
+      if(e.target.matches('[data-image-crop-backdrop]')){ cancelImageCrop(id); return; }
+      const cropAspect=e.target.closest('[data-image-crop-aspect]');
+      if(cropAspect){ setImageCropAspect(id,cropAspect.dataset.imageCropAspect); return; }
+      if(e.target.closest('[data-image-crop-reset]')){ resetImageCrop(id); return; }
+      if(e.target.closest('[data-image-crop-cancel]')){ cancelImageCrop(id); return; }
+      if(e.target.closest('[data-image-crop-apply]')){ applyImageCrop(id); return; }
+      if(e.target.closest('[data-image-download]')){ downloadImageBlock(id); return; }
       if(e.target.closest('.toggle-prefix')){ const b=findBlock(id); b.open=!b.open; scheduleSave(); renderCurrentBlocksKeepFocus(); return; }
       if(e.target.matches('[data-db-add-row]')){ const b=findBlock(id); b.rows.push(b.columns.map(()=>'')); scheduleSave(); renderCurrentBlocksKeepFocus(); return; }
       if(e.target.matches('[data-db-add-col]')){ const b=findBlock(id); b.columns.push('Property'); b.rows.forEach(r=>r.push('')); scheduleSave(); renderCurrentBlocksKeepFocus(); return; }
@@ -2685,13 +3122,22 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
   }
 
   function onMouseDown(e){
+    const cropHandle=e.target.closest?.('[data-image-crop-handle]');
+    if(e.button===0 && cropHandle){ const row=cropHandle.closest('.image-block'); if(row){ startImageCropFrameResize(cropHandle,row.dataset.blockId,e); return; } }
+    const cropFrame=e.target.closest?.('[data-image-crop-frame]');
+    if(e.button===0 && cropFrame){ const row=cropFrame.closest('.image-block'); if(row){ startImageCropFrameMove(cropFrame,row.dataset.blockId,e); return; } }
+    const imageResize=e.target.closest?.('[data-image-resize]');
+    if(e.button===0 && imageResize){
+      const row=imageResize.closest('.image-block');
+      if(row){ startImageResize(imageResize,row.dataset.blockId,imageResize.dataset.imageResize,e); return; }
+    }
     if(e.button===0){
       const tableCell=e.target.closest?.('[data-table-cell]');
       if(tableCell && els.blockEditor?.contains(tableCell)){
         beginTableCellSelection(e,tableCell);
       }else{
         clearTableCellSelection();
-        if(selectedTableBlockId && !e.target.closest?.('[data-table-select]')) clearSelectedTable();
+        if(selectedTableBlockId && !e.target.closest?.('[data-table-corner-select]')) clearSelectedTable();
         const content=e.target.closest?.('.block-content[contenteditable="true"]');
         if(content && els.blockEditor?.contains(content)) beginMultiBlockSelection(e,content);
         else clearMultiBlockSelection();
@@ -3063,8 +3509,10 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
       normalizeSimpleTableBlock(b); const [ri,ci]=e.target.dataset.tableCell.split(':').map(Number);
       if(b.tableRows[ri]) b.tableRows[ri][ci]=e.target.innerText.replace(/\n$/,''); scheduleSave('merge'); return;
     }
+    const imageCropInput=e.target.closest('[data-image-crop-zoom],[data-image-crop-x],[data-image-crop-y]');
+    if(imageCropInput){ updateImageCropControl(imageCropInput); return; }
     const imageCaption=e.target.closest('[data-image-caption]');
-    if(imageCaption){ const row=imageCaption.closest('.image-block'); const b=findBlock(row.dataset.blockId); if(b){ b.caption=imageCaption.innerText.replace(/\n$/, ''); scheduleSave('merge'); } return; }
+    if(imageCaption){ const row=imageCaption.closest('.image-block'); const b=findBlock(row.dataset.blockId); if(b){ b.caption=imageCaption.innerText.replace(/\n$/, ''); b.showCaption=true; scheduleSave('merge'); } return; }
     const row=e.target.closest('.database-block');
     if(row){
       const b=findBlock(row.dataset.blockId); if(!b) return;
@@ -3239,6 +3687,26 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
       const nb={id:uid('b'),type:nextType,text:right}; if(isListBlock(nb)) setListIndentLevel(nb,listIndentLevel(b)); const nextLinks=normalizeInlineLinkRanges(linkSplit.right,right.length); if(nextLinks.length) nb.inlineLinks=nextLinks; if(nextType==='todo') nb.checked=false;
       blocks.splice(index+1,0,nb); scheduleSave(); renderBlocks(page); focusBlock(nb.id,0); return;
     }
+    if(e.key==='Backspace' && (b.text||'')==='' && index===0 && blocks===page.blocks){
+      e.preventDefault();
+      blocks.splice(index,1);
+      scheduleSave();
+      renderBlocks(page);
+      requestAnimationFrame(()=>{
+        els.pageTitle.focus();
+        setCaretOffset(els.pageTitle,(page.title||'').length);
+      });
+      return;
+    }
+    if(e.key==='Backspace' && (b.text||'')==='' && index>0){
+      e.preventDefault();
+      const prev=blocks[index-1];
+      blocks.splice(index,1);
+      scheduleSave();
+      renderBlocks(page);
+      if(isTextLikeBlock(prev)) focusBlock(prev.id,(prev.text||'').length);
+      return;
+    }
     if(e.key==='Backspace' && (b.text||'')==='' && isListBlock(b)){
       e.preventDefault();
       if(listIndentLevel(b)>0) changeListIndent(blocks,index,-1);
@@ -3247,10 +3715,6 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
       renderBlocks(page);
       focusBlock(b.id,0);
       return;
-    }
-    if(e.key==='Backspace' && (b.text||'')==='' && index>0){
-      e.preventDefault(); const prev=blocks[index-1]; blocks.splice(index,1); scheduleSave(); renderBlocks(page);
-      if(isTextLikeBlock(prev)) focusBlock(prev.id,(prev.text||'').length); return;
     }
     if(e.key==='Backspace' && getCaretOffset(content)===0 && index>0){
       const prev=blocks[index-1];
@@ -3277,7 +3741,7 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
         tableAxisDrag={blockId,axis,index,targetIndex:index,after:false};
         clearTableCellSelection();
         clearSelectedTable();
-        if(axis==='row') tableHandle.closest('tr[data-table-row]')?.classList.add('table-row-dragging');
+        if(axis==='row') tableBlock.querySelector(`tr[data-table-row="${index}"]`)?.classList.add('table-row-dragging');
         else markTableColumnDragState(tableBlock,index,'table-col-dragging');
         if(e.dataTransfer){
           e.dataTransfer.effectAllowed='move';
@@ -3443,7 +3907,6 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
   }
 
   function markTableColumnDragState(tableBlock,index,className){
-    tableBlock?.querySelector?.(`[data-table-col-control="${index}"]`)?.classList.add(className);
     tableBlock?.querySelectorAll?.(`[data-table-column="${index}"]`).forEach(cell=>cell.classList.add(className));
   }
 
@@ -3461,27 +3924,30 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
 
   function tableAxisDropTarget(e,tableBlock,axis){
     if(axis==='row'){
-      const row=e.target.closest?.('tr[data-table-row]');
-      if(!row || !tableBlock.contains(row)) return null;
-      const index=Number(row.dataset.tableRow);
-      if(!Number.isInteger(index)) return null;
-      const rect=row.getBoundingClientRect();
-      return {index,after:e.clientY>=rect.top+rect.height/2};
-    }
-    let index=null, rect=null;
-    const control=e.target.closest?.('[data-table-col-control]');
-    if(control && tableBlock.contains(control)){
-      index=Number(control.dataset.tableColControl);
-      rect=control.getBoundingClientRect();
-    }else{
-      const cell=e.target.closest?.('[data-table-column]');
-      if(cell && tableBlock.contains(cell)){
-        index=Number(cell.dataset.tableColumn);
-        rect=cell.getBoundingClientRect();
+      const rows=[...tableBlock.querySelectorAll('tr[data-table-row]')];
+      if(!rows.length) return null;
+      let best=null, bestDistance=Infinity;
+      for(const row of rows){
+        const rect=row.getBoundingClientRect();
+        const center=rect.top+rect.height/2;
+        const distance=Math.abs(e.clientY-center);
+        if(distance<bestDistance){ bestDistance=distance; best={index:Number(row.dataset.tableRow),rect}; }
       }
+      if(!best||!Number.isInteger(best.index)) return null;
+      return {index:best.index,after:e.clientY>=best.rect.top+best.rect.height/2};
     }
-    if(!Number.isInteger(index) || !rect) return null;
-    return {index,after:e.clientX>=rect.left+rect.width/2};
+    const firstRow=tableBlock.querySelector('tr[data-table-row="0"]');
+    const cells=firstRow?[...firstRow.querySelectorAll('[data-table-column]')]:[];
+    if(!cells.length) return null;
+    let best=null, bestDistance=Infinity;
+    for(const cell of cells){
+      const rect=cell.getBoundingClientRect();
+      const center=rect.left+rect.width/2;
+      const distance=Math.abs(e.clientX-center);
+      if(distance<bestDistance){ bestDistance=distance; best={index:Number(cell.dataset.tableColumn),rect}; }
+    }
+    if(!best||!Number.isInteger(best.index)) return null;
+    return {index:best.index,after:e.clientX>=best.rect.left+best.rect.width/2};
   }
 
   function reorderSimpleTableAxis(block,axis,fromIndex,targetIndex,after){
@@ -4252,7 +4718,7 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     clearSelectedTable();
     hideFloatingMenus();
     clearExternalIconDropState();
-    activeImageBlockId=null; activeImageLinkBlockId=null;
+    activeImageBlockId=null; activeImageLinkBlockId=null; activeImageCropBlockId=null; imageCropSession=null;
     if(els.imageFileInput) els.imageFileInput.value='';
     if(els.pageIconFileInput) els.pageIconFileInput.value='';
     if(els.pageComments){ els.pageComments.classList.add('hidden'); els.pageComments.innerHTML=''; }
