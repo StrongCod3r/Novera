@@ -670,7 +670,8 @@
 
   function blockHTML(block, index, blocks){
     if (block.type === 'database') return databaseHTML(block);
-    const placeholder = index === blocks.length-1 ? "Type '/' for commands" : '';
+    const placeholder = "Type '/' for commands";
+    const emptyState = block.text ? 'false' : 'true';
     const gutter = `<div class="block-gutter"><button data-block-action="add" title="Add block">＋</button><button draggable="true" data-block-action="drag" title="Drag / options">⠿</button></div>`;
     if (block.type === 'page') return pageBlockHTML(block, gutter);
     if (block.type === 'link') return hyperlinkHTML(block, gutter);
@@ -679,11 +680,11 @@
     if (block.type === 'table') return simpleTableHTML(block, gutter);
     if (block.type === 'columns') return columnsHTML(block, gutter);
     if (block.type === 'divider') return `<div class="block-row" data-block-id="${block.id}" data-type="divider" draggable="false">${gutter}<div class="divider-line"></div></div>`;
-    if (block.type === 'todo') return `<div class="block-row ${block.checked?'checked':''}" data-block-id="${block.id}" data-type="todo">${gutter}<input class="todo-box" type="checkbox" ${block.checked?'checked':''}><div class="block-content" contenteditable="true" data-placeholder="${placeholder}">${escapeHtml(block.text||'')}</div></div>`;
-    if (block.type === 'bullet') return `<div class="block-row" data-block-id="${block.id}" data-type="bullet">${gutter}<div class="list-prefix">•</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}">${escapeHtml(block.text||'')}</div></div>`;
-    if (block.type === 'number') return `<div class="block-row" data-block-id="${block.id}" data-type="number">${gutter}<div class="list-prefix">${numberForBlock(block.id, blocks)}.</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}">${escapeHtml(block.text||'')}</div></div>`;
-    if (block.type === 'toggle') return `<div class="block-row" data-block-id="${block.id}" data-type="toggle">${gutter}<div class="toggle-prefix" aria-label="${block.open?'Collapse':'Expand'}">${chevronSvg(block.open?'down':'right','toggle-chevron')}</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}">${escapeHtml(block.text||'')}</div></div>`;
-    return `<div class="block-row" data-block-id="${block.id}" data-type="${block.type}">${gutter}<div class="block-content" contenteditable="true" spellcheck="true" data-placeholder="${placeholder}">${escapeHtml(block.text||'')}</div></div>`;
+    if (block.type === 'todo') return `<div class="block-row ${block.checked?'checked':''}" data-block-id="${block.id}" data-type="todo">${gutter}<input class="todo-box" type="checkbox" ${block.checked?'checked':''}><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${escapeHtml(block.text||'')}</div></div>`;
+    if (block.type === 'bullet') return `<div class="block-row" data-block-id="${block.id}" data-type="bullet">${gutter}<div class="list-prefix">•</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${escapeHtml(block.text||'')}</div></div>`;
+    if (block.type === 'number') return `<div class="block-row" data-block-id="${block.id}" data-type="number">${gutter}<div class="list-prefix">${numberForBlock(block.id, blocks)}.</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${escapeHtml(block.text||'')}</div></div>`;
+    if (block.type === 'toggle') return `<div class="block-row" data-block-id="${block.id}" data-type="toggle">${gutter}<div class="toggle-prefix" aria-label="${block.open?'Collapse':'Expand'}">${chevronSvg(block.open?'down':'right','toggle-chevron')}</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${escapeHtml(block.text||'')}</div></div>`;
+    return `<div class="block-row" data-block-id="${block.id}" data-type="${block.type}">${gutter}<div class="block-content" contenteditable="true" spellcheck="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${escapeHtml(block.text||'')}</div></div>`;
   }
 
   function normalizeHyperlinkUrl(value){
@@ -1204,7 +1205,7 @@
     const content=e.target.closest('.block-content');
     if(content){
       const row=content.closest('.block-row'); const b=findBlock(row.dataset.blockId); if(!b) return;
-      b.text=content.innerText.replace(/\n$/, ''); scheduleSave('merge'); if(['h1','h2','h3'].includes(b.type)) renderRightSidebar();
+      b.text=content.innerText.replace(/\n$/, ''); content.dataset.empty=b.text.length?'false':'true'; scheduleSave('merge'); if(['h1','h2','h3'].includes(b.type)) renderRightSidebar();
       if(b.text.startsWith('/') && !b.text.includes('\n')){ showSlashMenu(row,b); hideEmojiMenu(); }
       else { if(activeSlashBlockId===b.id) hideSlashMenu(); updateEmojiMenu(content,b); }
       els.emptyHint.style.display='none';
