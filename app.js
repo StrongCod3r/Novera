@@ -2633,10 +2633,11 @@
     if(e.key==='Enter' && !e.shiftKey){
       e.preventDefault();
       if(b.type==='database') return;
-      if(b.type==='todo' && !(b.text||'').trim()){
+      if((b.type==='todo' || b.type==='toggle') && !(b.text||'').trim()){
         b.type='text';
         b.text='';
         delete b.checked;
+        delete b.open;
         delete b.indent;
         delete b.inlineLinks;
         hideFloatingMenus();
@@ -3262,7 +3263,7 @@
     return {start:before.toString().length,end:through.toString().length};
   }
 
-  function pasteMarkdownIntoBlock(content,markdown){
+  function pasteMarkdownIntoBlock(content,markdown,sourceLabel='Markdown'){
     const row=content?.closest('.block-row'), location=findBlockLocation(row?.dataset.blockId), page=currentPage();
     if(!location || !page || !isTextLikeBlock(location.block)) return false;
     const parsed=parseMarkdownBlocks(markdown);
@@ -3287,7 +3288,7 @@
 
     const focusTarget=trailing || [...parsed].reverse().find(isTextLikeBlock) || (left?block:null);
     if(focusTarget) focusBlock(focusTarget.id,(focusTarget.text||'').length);
-    toast(`Markdown pasted as ${parsed.length} block${parsed.length===1?'':'s'}`);
+    toast(`${sourceLabel} pasted as ${parsed.length} block${parsed.length===1?'':'s'}`);
     return true;
   }
 
@@ -3333,7 +3334,9 @@
       const explicitMarkdown=String(e.clipboardData?.getData('text/markdown')||'');
       const plainText=String(e.clipboardData?.getData('text/plain')||'');
       const markdown=explicitMarkdown || plainText;
-      if(markdown && (explicitMarkdown || looksLikeMarkdown(markdown)) && pasteMarkdownIntoBlock(content,markdown)){
+      const markdownLike=!!explicitMarkdown || looksLikeMarkdown(markdown);
+      const hasParagraphBreaks=!explicitMarkdown && /(?:\r?\n)[ \t]*(?:\r?\n)/.test(plainText);
+      if(markdown && (markdownLike || hasParagraphBreaks) && pasteMarkdownIntoBlock(content,markdown,markdownLike?'Markdown':'Text')){
         e.preventDefault();
         return;
       }
