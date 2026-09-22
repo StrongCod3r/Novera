@@ -1036,9 +1036,11 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
 (() => {
   'use strict';
 
-  const LEGACY_STORAGE_KEY = 'noteflow-workspace-v1';
-  const VAULTS_KEY = 'noteflow-vaults-v1';
-  const vaultStorageKey = id => `noteflow-vault:${id}`;
+  const DB_NAME = 'novera-local-workspace';
+  const DB_VERSION = 1;
+  const DB_META_STORE = 'meta';
+  const DB_VAULT_STORE = 'vaults';
+  const DB_REGISTRY_KEY = 'registry';
   const uid = (prefix = 'id') => `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
   const clone = obj => JSON.parse(JSON.stringify(obj));
 
@@ -1205,16 +1207,12 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     try{ const u=new URL(raw); return (u.protocol==='http:'||u.protocol==='https:')?u.href:''; }catch{ return ''; }
   }
 
-  let vaultRegistry = loadVaultRegistry();
-  let activeVaultId = vaultRegistry.activeVaultId;
-  let state = loadState();
-  if (typeof state.sidebarOpen !== 'boolean') state.sidebarOpen = true;
-  if (typeof state.rightSidebarOpen !== 'boolean') state.rightSidebarOpen = true;
-  if (!['files','favorites'].includes(state.leftPanelMode)) state.leftPanelMode = 'files';
-  if (!['outline','backlinks'].includes(state.rightPanelMode)) state.rightPanelMode = 'outline';
-  if (!Number.isFinite(state.sidebarWidth)) state.sidebarWidth = 276;
-  if (!Number.isFinite(state.rightSidebarWidth)) state.rightSidebarWidth = 286;
-  let activeSlashBlockId = null;
+  let vaultRegistry = {activeVaultId:null,vaults:[]};
+  let activeVaultId = null;
+  let state = normalizeWorkspace(clone(DEFAULT_WORKSPACE));
+  let storageDbPromise = null;
+  let storageWriteChain = Promise.resolve();
+  let activeSlashBlockId = null;  let activeSlashBlockId = null;
   let slashIndex = 0;
   let activeEmojiBlockId = null;
   let emojiIndex = 0;
@@ -1289,52 +1287,137 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     return parsed;
   }
 
-  function loadVaultRegistry(){
-    try{
-      const saved=JSON.parse(localStorage.getItem(VAULTS_KEY)||'null');
-      if(saved?.vaults?.length){
-        saved.vaults=saved.vaults.filter(v=>v?.id && v?.name).map(v=>({id:String(v.id),name:String(v.name)}));
-        if(saved.vaults.length){
-          if(!saved.vaults.some(v=>v.id===saved.activeVaultId)) saved.activeVaultId=saved.vaults[0].id;
-          return saved;
-        }
-      }
-    }catch{}
+  function openStorageDb(){
+    if(storageDbPromise) return storageDbPromise;
+    storageDbPromise=new Promise((resolve,reject)=>{
+      const request=indexedDB.open(DB_NAME,DB_VERSION);
+      request.onupgradeneeded=()=>{
+        const db=request.result;
+        if(!db.objectStoreNames.contains(DB_META_STORE)) db.createObjectStore(DB_META_STORE,{keyPath:'key'});
+        if(!db.objectStoreNames.contains(DB_VAULT_STORE)) db.createObjectStore(DB_VAULT_STORE,{keyPath:'id'});
+      };
+      request.onsuccess=()=>{
+        const db=request.result;
+        db.onversionchange=()=>db.close();
+        resolve(db);
+      };
+      request.onerror=()=>reject(request.error||new Error('Could not open IndexedDB'));
+      request.onblocked=()=>reject(new Error('IndexedDB upgrade is blocked by another Novera tab'));
+    });
+    return storageDbPromise;
+  }
+
+  function idbRequest(request){
+    return new Promise((resolve,reject)=>{
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error||new Error('IndexedDB request failed'));
+    });
+  }
+
+  function idbTransactionDone(tx){
+    return new Promise((resolve,reject)=>{
+      tx.oncomplete=()=>resolve();
+      tx.onerror=()=>reject(tx.error||new Error('IndexedDB transaction failed'));
+      tx.onabort=()=>reject(tx.error||new Error('IndexedDB transaction aborted'));
+    });
+  }
+
+  async function idbGet(storeName,key){
+    const db=await openStorageDb();
+    const tx=db.transaction(storeName,'readonly');
+    const value=await idbRequest(tx.objectStore(storeName).get(key));
+    await idbTransactionDone(tx);
+    return value;
+  }
+
+  function queueStorageWrite(operation){
+    storageWriteChain=storageWriteChain.then(operation,operation);
+    return storageWriteChain;
+  }
+
+  function sanitizeVaultRegistry(saved){
+    if(!saved?.vaults?.length) return null;
+    const vaults=saved.vaults.filter(v=>v?.id&&v?.name).map(v=>({id:String(v.id),name:String(v.name)}));
+    if(!vaults.length) return null;
+    const activeVaultId=vaults.some(v=>v.id===saved.activeVaultId)?String(saved.activeVaultId):vaults[0].id;
+    return {activeVaultId,vaults};
+  }
+
+  async function loadVaultRegistry(){
+    const saved=await idbGet(DB_META_STORE,DB_REGISTRY_KEY);
+    const existing=sanitizeVaultRegistry(saved?.value);
+    if(existing) return existing;
+
     const id=uid('vault');
-    let legacy=null;
-    try{ legacy=JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY)||'null'); }catch{}
-    const name=(legacy?.name||'StrongCod3r Vault').trim() || 'StrongCod3r Vault';
+    const name=(DEFAULT_WORKSPACE.name||'Novera Vault').trim()||'Novera Vault';
     const registry={activeVaultId:id,vaults:[{id,name}]};
-    try{
-      localStorage.setItem(VAULTS_KEY,JSON.stringify(registry));
-      localStorage.setItem(vaultStorageKey(id),JSON.stringify(legacy?.pages?.length?legacy:DEFAULT_WORKSPACE));
-    }catch{}
+    const workspace=normalizeWorkspace(clone(DEFAULT_WORKSPACE));
+    workspace.name=name;
+
+    const db=await openStorageDb();
+    const tx=db.transaction([DB_META_STORE,DB_VAULT_STORE],'readwrite');
+    tx.objectStore(DB_META_STORE).put({key:DB_REGISTRY_KEY,value:clone(registry),createdAt:new Date().toISOString()});
+    tx.objectStore(DB_VAULT_STORE).put({id,workspace,updatedAt:new Date().toISOString()});
+    await idbTransactionDone(tx);
     return registry;
   }
 
-  function saveVaultRegistry(){ try{ localStorage.setItem(VAULTS_KEY,JSON.stringify(vaultRegistry)); }catch{} }
+  function saveVaultRegistry(){
+    const snapshot=clone(vaultRegistry);
+    return queueStorageWrite(async()=>{
+      const db=await openStorageDb();
+      const tx=db.transaction(DB_META_STORE,'readwrite');
+      tx.objectStore(DB_META_STORE).put({key:DB_REGISTRY_KEY,value:snapshot,updatedAt:new Date().toISOString()});
+      await idbTransactionDone(tx);
+    }).catch(error=>{
+      console.error('Could not save vault registry',error);
+      toast('Could not save vault information to IndexedDB.');
+    });
+  }
+
   function activeVaultMeta(){ return vaultRegistry.vaults.find(v=>v.id===activeVaultId) || vaultRegistry.vaults[0]; }
 
-  function loadState(){
+  async function loadState(vaultId=activeVaultId){
     try{
-      const raw=localStorage.getItem(vaultStorageKey(activeVaultId));
-      const parsed=normalizeWorkspace(raw?JSON.parse(raw):clone(DEFAULT_WORKSPACE));
-      parsed.name=activeVaultMeta()?.name || parsed.name || 'Vault';
+      const record=await idbGet(DB_VAULT_STORE,vaultId);
+      const parsed=normalizeWorkspace(record?.workspace?clone(record.workspace):clone(DEFAULT_WORKSPACE));
+      const meta=vaultRegistry.vaults.find(v=>v.id===vaultId);
+      parsed.name=meta?.name||parsed.name||'Vault';
       return parsed;
-    }catch{
+    }catch(error){
+      console.error('Could not load workspace from IndexedDB',error);
       const fallback=normalizeWorkspace(clone(DEFAULT_WORKSPACE));
-      fallback.name=activeVaultMeta()?.name || 'Vault';
+      fallback.name=vaultRegistry.vaults.find(v=>v.id===vaultId)?.name||'Vault';
       return fallback;
     }
   }
 
   function persistStateNow(){
     clearTimeout(saveTimer);
-    try { localStorage.setItem(vaultStorageKey(activeVaultId), JSON.stringify(state)); }
-    catch { toast('Local storage is full. Try a smaller image or export your workspace.'); }
+    const vaultId=activeVaultId;
+    if(!vaultId) return Promise.resolve();
+    const snapshot=clone(state);
+    return queueStorageWrite(async()=>{
+      const db=await openStorageDb();
+      const tx=db.transaction(DB_VAULT_STORE,'readwrite');
+      tx.objectStore(DB_VAULT_STORE).put({id:vaultId,workspace:snapshot,updatedAt:new Date().toISOString()});
+      await idbTransactionDone(tx);
+    }).catch(error=>{
+      console.error('Could not save workspace to IndexedDB',error);
+      toast('Could not save workspace to IndexedDB.');
+    });
   }
 
-  function snapshotsEqual(a,b){
+  function deleteVaultFromStorage(id){
+    return queueStorageWrite(async()=>{
+      const db=await openStorageDb();
+      const tx=db.transaction(DB_VAULT_STORE,'readwrite');
+      tx.objectStore(DB_VAULT_STORE).delete(id);
+      await idbTransactionDone(tx);
+    });
+  }
+
+  function snapshotsEqual  function snapshotsEqual(a,b){
     try { return JSON.stringify(a)===JSON.stringify(b); } catch { return false; }
   }
 
@@ -1440,16 +1523,18 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     if(els.deleteVaultBtn) els.deleteVaultBtn.disabled=vaultRegistry.vaults.length===1;
   }
 
-  function switchVault(id){
+  async function switchVault(id){
     if(!id || id===activeVaultId || !vaultRegistry.vaults.some(v=>v.id===id)) return;
     cancelPageOperations();
-    flushHistoryPending(activeVaultId); persistStateNow();
-    activeVaultId=id; vaultRegistry.activeVaultId=id; saveVaultRegistry();
-    state=loadState(); initializeHistoryForVault(activeVaultId); applyTheme(); renderAll();
+    flushHistoryPending(activeVaultId);
+    await persistStateNow();
+    activeVaultId=id; vaultRegistry.activeVaultId=id;
+    await saveVaultRegistry();
+    state=await loadState(id); initializeHistoryForVault(activeVaultId); applyTheme(); renderAll();
     toast(`Vault: ${activeVaultMeta()?.name||'Vault'}`);
   }
 
-  let vaultDialogMode = null;
+  let vaultDialogMode = null;  let vaultDialogMode = null;
 
   function createVault(){ openVaultDialog('create'); }
   function renameVault(){ openVaultDialog('rename'); }
@@ -1472,7 +1557,7 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     if(els.vaultDialogError) els.vaultDialogError.textContent='';
   }
 
-  function submitVaultDialog(){
+  async function submitVaultDialog(){
     if(!vaultDialogMode || !els.vaultDialogInput) return;
     const name=els.vaultDialogInput.value.trim();
     if(!name){ els.vaultDialogError.textContent='Enter a vault name.'; els.vaultDialogInput.focus(); return; }
@@ -1480,42 +1565,63 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     if(duplicate){ els.vaultDialogError.textContent='A vault with this name already exists.'; els.vaultDialogInput.focus(); els.vaultDialogInput.select(); return; }
     if(vaultDialogMode==='create'){
       cancelPageOperations();
-      persistStateNow();
+      await persistStateNow();
       const id=uid('vault');
-      vaultRegistry.vaults.push({id,name}); vaultRegistry.activeVaultId=id; activeVaultId=id; saveVaultRegistry();
-      state=makeBlankWorkspace(); state.name=name; initializeHistoryForVault(activeVaultId,{reset:true}); persistStateNow(); applyTheme(); closeVaultDialog(); renderAll();
+      vaultRegistry.vaults.push({id,name}); vaultRegistry.activeVaultId=id; activeVaultId=id;
+      await saveVaultRegistry();
+      state=makeBlankWorkspace(); state.name=name; initializeHistoryForVault(activeVaultId,{reset:true}); await persistStateNow(); applyTheme(); closeVaultDialog(); renderAll();
       requestAnimationFrame(()=>{ els.pageTitle?.focus(); selectAllContent(els.pageTitle); });
       toast('Vault created');
       return;
     }
     const meta=activeVaultMeta(); if(!meta) return closeVaultDialog();
-    if(name!==meta.name){ meta.name=name; state.name=name; saveVaultRegistry(); persistStateNow(); renderVaultSelector(); toast('Vault renamed'); }
+    if(name!==meta.name){ meta.name=name; state.name=name; await saveVaultRegistry(); await persistStateNow(); renderVaultSelector(); toast('Vault renamed'); }
     closeVaultDialog();
   }
 
-  function deleteVault(){
+  async function deleteVault(){
     const meta=activeVaultMeta(); if(!meta || vaultRegistry.vaults.length<=1) return;
     if(!confirm(`Delete vault "${meta.name}"? This removes its locally stored pages.`)) return;
     cancelPageOperations();
-    persistStateNow();
-    try{ localStorage.removeItem(vaultStorageKey(meta.id)); }catch{}
+    await persistStateNow();
+    await deleteVaultFromStorage(meta.id);
     const index=vaultRegistry.vaults.findIndex(v=>v.id===meta.id); vaultRegistry.vaults.splice(index,1);
     const next=vaultRegistry.vaults[Math.max(0,index-1)] || vaultRegistry.vaults[0];
-    historyByVault.delete(meta.id); activeVaultId=next.id; vaultRegistry.activeVaultId=next.id; saveVaultRegistry(); state=loadState(); initializeHistoryForVault(activeVaultId); applyTheme(); renderAll(); toast('Vault deleted');
+    historyByVault.delete(meta.id); activeVaultId=next.id; vaultRegistry.activeVaultId=next.id;
+    await saveVaultRegistry();
+    state=await loadState(activeVaultId); initializeHistoryForVault(activeVaultId); applyTheme(); renderAll(); toast('Vault deleted');
   }
 
-  function currentPage(){ return state.pages.find(p => p.id === state.currentPageId) || state.pages[0]; }
+  function currentPage  function currentPage(){ return state.pages.find(p => p.id === state.currentPageId) || state.pages[0]; }
   function pageById(id){ return state.pages.find(p => p.id === id); }
   function childrenOf(id){ return state.pages.filter(p => p.parentId === id); }
 
-  function init(){
-    initializeHistoryForVault(activeVaultId,{reset:true});
-    applyTheme();
-    bindEvents();
-    renderAll();
+  async function init(){
+    try{
+      await openStorageDb();
+      vaultRegistry=await loadVaultRegistry();
+      activeVaultId=vaultRegistry.activeVaultId;
+      state=await loadState(activeVaultId);
+      if(typeof state.sidebarOpen!=='boolean') state.sidebarOpen=true;
+      if(typeof state.rightSidebarOpen!=='boolean') state.rightSidebarOpen=true;
+      if(!['files','favorites'].includes(state.leftPanelMode)) state.leftPanelMode='files';
+      if(!['outline','backlinks'].includes(state.rightPanelMode)) state.rightPanelMode='outline';
+      if(!Number.isFinite(state.sidebarWidth)) state.sidebarWidth=276;
+      if(!Number.isFinite(state.rightSidebarWidth)) state.rightSidebarWidth=286;
+      initializeHistoryForVault(activeVaultId,{reset:true});
+      applyTheme();
+      bindEvents();
+      renderAll();
+    }catch(error){
+      console.error('Novera IndexedDB initialization failed',error);
+      applyTheme();
+      bindEvents();
+      renderAll();
+      toast('IndexedDB could not be initialized. Changes may not persist.');
+    }
   }
 
-  function renderAll(){
+  function renderAll  function renderAll(){
     renderVaultSelector();
     renderSidebar();
     renderTabs();
@@ -3640,7 +3746,7 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
       let shortcutType=null;
       if(selectionCollapsed && caret===marker.length){
         if(marker==='*' || marker==='-' || marker==='+') shortcutType='bullet';
-        else if(marker==='1.' || marker==='1)') shortcutType='number';
+        else if(/^\d+[.)]$/.test(marker)) shortcutType='number';
       }
       if(shortcutType){
         e.preventDefault();
@@ -3668,7 +3774,7 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     if(e.key==='Enter' && !e.shiftKey){
       e.preventDefault();
       if(b.type==='database') return;
-      if((b.type==='todo' || b.type==='toggle') && !(b.text||'').trim()){
+      if((b.type==='bullet' || b.type==='number' || b.type==='todo' || b.type==='toggle') && !(b.text||'').trim()){
         b.type='text';
         b.text='';
         delete b.checked;
@@ -4200,6 +4306,133 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
       || /(^|\n)\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}:?\s*\|/.test(source);
   }
 
+  function richHtmlInlinePayload(root,{skipNestedLists=false}={}){
+    let value=''; const links=[];
+    const appendRaw=raw=>{
+      let part=String(raw||'').replace(/\u00a0/g,' ').replace(/[\t\r\n ]+/g,' ');
+      if(!part) return;
+      if(value && /\s$/.test(value) && /^\s/.test(part)) part=part.replace(/^\s+/, '');
+      value+=part;
+    };
+    const walk=node=>{
+      if(node.nodeType===Node.TEXT_NODE){ appendRaw(node.nodeValue); return; }
+      if(node.nodeType!==Node.ELEMENT_NODE) return;
+      const el=node, tag=el.tagName;
+      if(['SCRIPT','STYLE','NOSCRIPT'].includes(tag)) return;
+      if(skipNestedLists && (tag==='UL'||tag==='OL')) return;
+      if(tag==='BR'){ value+='\n'; return; }
+      if(tag==='IMG'){
+        const alt=String(el.getAttribute('alt')||'').trim(); if(alt) appendRaw(alt);
+        return;
+      }
+      if(tag==='A'){
+        const start=value.length;
+        for(const child of el.childNodes) walk(child);
+        const end=value.length;
+        const url=normalizePastedLinkUrl(el.getAttribute('href')||'') || normalizeHyperlinkUrl(el.getAttribute('href')||'');
+        if(url && end>start) links.push({start,end,url});
+        return;
+      }
+      for(const child of el.childNodes) walk(child);
+    };
+    walk(root);
+    const leading=value.length-value.trimStart().length;
+    const clean=value.trim();
+    const normalizedLinks=normalizeInlineLinkRanges(links.map(link=>({start:Math.max(0,link.start-leading),end:Math.max(0,link.end-leading),url:link.url})),clean.length);
+    return {text:clean,links:normalizedLinks};
+  }
+
+  function richHtmlBlockFromElement(el,type,extra={}){
+    const payload=richHtmlInlinePayload(el);
+    if(!payload.text && type!=='text') return null;
+    const block={id:uid('b'),type,text:payload.text,...extra};
+    if(payload.links.length) block.inlineLinks=payload.links;
+    return block;
+  }
+
+  function parseRichHtmlBlocks(html){
+    const source=String(html||''); if(!source.trim()) return [];
+    let doc;
+    try{ doc=new DOMParser().parseFromString(source,'text/html'); }catch{return [];}
+    const blocks=[];
+    const pushBlock=block=>{ if(block) blocks.push(block); };
+
+    const processList=(list,indent=0)=>{
+      const type=list.tagName==='OL'?'number':'bullet';
+      for(const li of Array.from(list.children).filter(child=>child.tagName==='LI')){
+        const payload=richHtmlInlinePayload(li,{skipNestedLists:true});
+        const checkbox=li.querySelector(':scope > input[type="checkbox"], :scope > p > input[type="checkbox"]');
+        const block={id:uid('b'),type:checkbox?'todo':type,text:payload.text};
+        if(indent) block.indent=Math.min(8,indent);
+        if(checkbox) block.checked=checkbox.checked || checkbox.hasAttribute('checked');
+        if(payload.links.length) block.inlineLinks=payload.links;
+        if(block.text || checkbox) blocks.push(block);
+        for(const nested of Array.from(li.children).filter(child=>child.tagName==='UL'||child.tagName==='OL')) processList(nested,indent+1);
+      }
+    };
+
+    const processTable=table=>{
+      const rowEls=[...table.querySelectorAll('tr')]; if(!rowEls.length) return;
+      const rows=rowEls.map(row=>[...row.children].filter(cell=>cell.tagName==='TH'||cell.tagName==='TD').map(cell=>(cell.innerText||cell.textContent||'').trim()));
+      const width=Math.max(1,...rows.map(row=>row.length));
+      const normalized=rows.map(row=>{ const next=row.slice(0,width); while(next.length<width) next.push(''); return next; });
+      blocks.push({id:uid('b'),type:'table',tableRows:normalized,tableHeaderRow:!!table.querySelector('th'),tableHeaderColumn:false});
+    };
+
+    const processContainer=container=>{
+      for(const node of container.childNodes){
+        if(node.nodeType===Node.TEXT_NODE){
+          const value=String(node.nodeValue||'').trim(); if(value) blocks.push({id:uid('b'),type:'text',text:value});
+          continue;
+        }
+        if(node.nodeType!==Node.ELEMENT_NODE) continue;
+        const el=node, tag=el.tagName;
+        if(['SCRIPT','STYLE','NOSCRIPT'].includes(tag)) continue;
+        if(/^H[1-6]$/.test(tag)){ pushBlock(richHtmlBlockFromElement(el,`h${Math.min(3,Number(tag.slice(1)))}`)); continue; }
+        if(tag==='P'){ pushBlock(richHtmlBlockFromElement(el,'text')); continue; }
+        if(tag==='UL'||tag==='OL'){ processList(el,0); continue; }
+        if(tag==='BLOCKQUOTE'){
+          const inner=[...el.children].filter(child=>['P','DIV'].includes(child.tagName));
+          if(inner.length){ for(const child of inner) pushBlock(richHtmlBlockFromElement(child,'quote')); }
+          else pushBlock(richHtmlBlockFromElement(el,'quote'));
+          continue;
+        }
+        if(tag==='PRE'){
+          const code=el.querySelector('code')||el;
+          const className=String(code.className||'');
+          const langMatch=className.match(/(?:language|lang)-([a-z0-9_+#.-]+)/i);
+          const language=normalizeMarkdownCodeLanguage(langMatch?.[1]||'plain');
+          blocks.push({id:uid('b'),type:'code',text:String(code.textContent||'').replace(/\n$/,''),language,codeWrap:false,codeLineNumbers:false,mermaidPreview:language==='mermaid'});
+          continue;
+        }
+        if(tag==='TABLE'){ processTable(el); continue; }
+        if(tag==='HR'){ blocks.push({id:uid('b'),type:'divider'}); continue; }
+        if(tag==='IMG'){
+          const src=normalizeImageUrl(el.getAttribute('src')||'');
+          if(src) blocks.push({id:uid('b'),type:'image',src,caption:'',alt:String(el.getAttribute('alt')||'')});
+          continue;
+        }
+        if(tag==='A' && !el.querySelector('*')){
+          const payload=richHtmlInlinePayload(el), url=normalizePastedLinkUrl(el.getAttribute('href')||'') || normalizeHyperlinkUrl(el.getAttribute('href')||'');
+          if(url && payload.text){ blocks.push({id:uid('b'),type:'link',text:payload.text,url}); continue; }
+        }
+        const structural=el.querySelector('h1,h2,h3,h4,h5,h6,p,ul,ol,blockquote,pre,table,hr,img');
+        if(structural){ processContainer(el); continue; }
+        pushBlock(richHtmlBlockFromElement(el,'text'));
+      }
+    };
+
+    processContainer(doc.body);
+    return blocks;
+  }
+
+  function richHtmlShouldCreateBlocks(html,blocks){
+    if(!html || !blocks?.length) return false;
+    let doc; try{ doc=new DOMParser().parseFromString(html,'text/html'); }catch{return false;}
+    if(doc.body.querySelector('h1,h2,h3,h4,h5,h6,ul,ol,blockquote,pre,table,hr')) return true;
+    return doc.body.querySelectorAll('p').length>1 || blocks.length>1;
+  }
+
   function parseMarkdownBlocks(markdown){
     const lines=String(markdown||'').replace(/\r\n?/g,'\n').split('\n');
     const blocks=[];
@@ -4298,11 +4531,9 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     return {start:before.toString().length,end:through.toString().length};
   }
 
-  function pasteMarkdownIntoBlock(content,markdown,sourceLabel='Markdown'){
+  function pasteParsedBlocksIntoBlock(content,parsed,sourceLabel='Content'){
     const row=content?.closest('.block-row'), location=findBlockLocation(row?.dataset.blockId), page=currentPage();
-    if(!location || !page || !isTextLikeBlock(location.block)) return false;
-    const parsed=parseMarkdownBlocks(markdown);
-    if(!parsed.length) return false;
+    if(!location || !page || !isTextLikeBlock(location.block) || !parsed?.length) return false;
 
     const block=location.block, original=String(block.text||''), {start,end}=selectionOffsetsWithin(content);
     const left=original.slice(0,start), right=original.slice(end), splitLinks=inlineLinksAroundRange(block,start,end);
@@ -4327,7 +4558,17 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     return true;
   }
 
-  function onBeforeInput(e){
+  function pasteMarkdownIntoBlock(content,markdown,sourceLabel='Markdown'){
+    return pasteParsedBlocksIntoBlock(content,parseMarkdownBlocks(markdown),sourceLabel);
+  }
+
+  function pasteRichHtmlIntoBlock(content,html){
+    const parsed=parseRichHtmlBlocks(html);
+    if(!richHtmlShouldCreateBlocks(html,parsed)) return false;
+    return pasteParsedBlocksIntoBlock(content,parsed,'Rich text');
+  }
+
+  function onBeforeInput(e){  function onBeforeInput(e){
     if(e.target===els.pageTitle && ['insertParagraph','insertLineBreak'].includes(e.inputType)) e.preventDefault();
   }
 
@@ -4366,6 +4607,11 @@ body.dark .multi-block-selection-rect.multi-block-selection-table { background:c
     if(content){
       const linkPayload=clipboardLinkPayload(e.clipboardData);
       if(linkPayload && pasteLinkIntoBlock(content,linkPayload)){ e.preventDefault(); return; }
+      const richHtml=String(e.clipboardData?.getData('text/html')||'');
+      if(richHtml && pasteRichHtmlIntoBlock(content,richHtml)){
+        e.preventDefault();
+        return;
+      }
       const explicitMarkdown=String(e.clipboardData?.getData('text/markdown')||'');
       const plainText=String(e.clipboardData?.getData('text/plain')||'');
       const markdown=explicitMarkdown || plainText;
