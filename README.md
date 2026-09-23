@@ -16,13 +16,15 @@ Then open http://localhost:8080.
 
 - Notion-style sidebar and page editor
 - Nested pages, favorites and Home view
-- Block editor: text, Page, Link, H1/H2/H3, bullets, numbers, todos, toggles, quote, callout, code, divider, Image, Table, Columns and Database
+- Block editor: text, Page, Link to page, Link, H1/H2/H3, bullets, numbers, todos, toggles, quote, callout, code, divider, Image, Table, Columns and Database
 - Slash commands
 - Drag/drop block reordering
 - Simple Table block with editable cells, header row/column toggles, row/column add/remove and keyboard Tab navigation
 - Columns block with 2–4 columns, nested blocks, slash commands inside columns, and drag/drop between columns
 - Inline Database block
 - Command palette (`Ctrl/Cmd + K`)
+- Notion-style `/Link to page` block for referencing existing pages without changing their hierarchy; page references feed backlinks
+- Interactive Graph View rendered as a normal editor tab, with page nodes, link edges, search, zoom, and node navigation
 - IndexedDB persistence for local-first workspace data
 - Light/dark/system themes (`Ctrl/Cmd + Shift + L`)
 - JSON workspace import/export
@@ -55,6 +57,8 @@ The left sidebar footer includes a vault selector. Multiple local vaults are sup
 - Expanded page icon emoji catalog.
 - Inline emoji picker: type `:` in a text block, optionally continue with a name such as `:fire`, then use arrow keys + Enter or click an emoji.
 - Unified editor/sidebar scrollbar styling.
+- Contextual inline formatting toolbar for selected text, including block type, colors, bold/italic/underline/strike, inline code, comments, and links.
+- Inline Link picker can search existing Novera pages or attach an external URL; internal inline links participate in backlinks and Graph View.
 
 
 ## Table and Columns
@@ -87,7 +91,7 @@ The Files/Favorites sidebar keeps vertical overflow disabled unless its current 
 
 - Mermaid code language with syntax highlighting and live diagram preview. Mermaid 12 is loaded on demand from jsDelivr when a diagram preview is shown.
 - Code blocks now follow the active light/dark theme, including syntax colors, toolbar, line numbers and Mermaid preview.
-- Paste Markdown or rich HTML into text-like blocks and Novera converts headings, paragraphs, lists, tasks, quotes, code, tables, links and images into native blocks.
+- Paste Markdown into text-like blocks and Novera converts headings, lists, tasks, quotes, callouts, dividers, fenced code, tables, links and images into native blocks.
 
 ## Source layout
 
