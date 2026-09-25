@@ -19,6 +19,7 @@ Then open http://localhost:8080.
 - Block editor: text, Page, Link to page, Link, H1/H2/H3, bullets, numbers, todos, toggles, quote, callout, code, divider, Image, Table, Columns and Database
 - Slash commands
 - Drag/drop block reordering
+- Dockable page tabs: drag a tab to any editor edge to split left/right or top/bottom, drag it into another pane's tab bar to regroup it, and drag the divider to resize. The pane layout is saved with the vault.
 - Simple Table block with editable cells, header row/column toggles, row/column add/remove and keyboard Tab navigation
 - Columns block with 2–4 columns, nested blocks, slash commands inside columns, and drag/drop between columns
 - Inline Database block
@@ -38,7 +39,7 @@ This is a local-first front-end clone/prototype. Real multi-user collaboration, 
 
 ## Standalone build
 
-`index.html` now embeds all CSS and JavaScript, so it can be opened directly without a web server and without loading `styles.css` or `app.js` separately.
+`index.html` loads the stylesheet from `styles.css` and keeps the application JavaScript inline.
 
 - VS Code-style page tabs: persistent open tabs, drag-to-reorder, close, middle-click close, Ctrl/Cmd+W and Ctrl/Cmd+Tab navigation.
 
@@ -71,7 +72,7 @@ The left sidebar footer includes a vault selector. Multiple local vaults are sup
 
 The editor keeps an in-memory undo history per vault (up to 100 checkpoints). Continuous typing is grouped into one undo step after a short pause, while structural actions such as adding/removing/moving blocks, changing tables/columns, pages, icons, favorites and tabs create their own checkpoints.
 
-Shortcuts: `Ctrl/Cmd+Z` undo, `Ctrl/Cmd+Shift+Z` redo, and `Ctrl+Y` redo on Windows-style keyboards. The top note toolbar also includes Undo/Redo buttons. History is intentionally not persisted across full page reloads.
+Shortcuts: `Ctrl/Cmd+Z` undo, `Ctrl/Cmd+Shift+Z` redo, `Ctrl/Cmd+K` search, `Ctrl/Cmd+Alt+N` new page, `Ctrl/Cmd+Alt+→` split right, `Ctrl/Cmd+Alt+↓` split down, and `Ctrl/Cmd+Alt+Backspace` merge panes. `Ctrl+Y` also redoes on Windows-style keyboards. Open Settings → Keyboard shortcuts to view or change the app shortcuts. Shortcut assignments are saved with each workspace. History is intentionally not persisted across full page reloads.
 
 
 

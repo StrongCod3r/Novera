@@ -8,12 +8,74 @@
   const DB_REGISTRY_KEY = 'registry';
   const uid = (prefix = 'id') => `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
   const clone = obj => JSON.parse(JSON.stringify(obj));
+  const MAIN_EDITOR_GROUP = 'editor_main';
+  const DEFAULT_SHORTCUTS = Object.freeze({
+    undo:'Mod+Z',redo:'Mod+Shift+Z',search:'Mod+K',favorite:'Mod+Shift+F',comments:'Mod+Alt+M',share:'Mod+Alt+S',
+    toggleRightSidebar:'Mod+Alt+R',toggleTheme:'Mod+Shift+L',settings:'Mod+Alt+,',newPage:'Mod+Alt+N',graph:'Mod+Alt+G',
+    splitRight:'Mod+Alt+ArrowRight',splitDown:'Mod+Alt+ArrowDown',mergePanes:'Mod+Alt+Backspace'
+  });
+  const SHORTCUT_ACTIONS = [
+    {id:'undo',label:'Undo'}, {id:'redo',label:'Redo'}, {id:'search',label:'Open search'},
+    {id:'favorite',label:'Toggle page favorite'}, {id:'comments',label:'Open page comments'}, {id:'share',label:'Share current page'},
+    {id:'toggleRightSidebar',label:'Toggle right sidebar'}, {id:'toggleTheme',label:'Cycle theme'},
+    {id:'settings',label:'Open settings'}, {id:'newPage',label:'Create a new page'}, {id:'graph',label:'Open graph view'},
+    {id:'splitRight',label:'Split editor right'}, {id:'splitDown',label:'Split editor down'}, {id:'mergePanes',label:'Merge editor panes'}
+  ];
+  const RESERVED_SHORTCUTS = new Set(['Mod+B','Mod+I','Mod+U','Mod+E','Mod+F','Mod+H','Mod+J','Mod+L','Mod+N','Mod+O','Mod+P','Mod+R','Mod+S','Mod+T','Mod+Shift+S','Mod+Shift+M','Mod+Shift+G','Mod+Shift+O','Mod+Shift+T','Mod+Shift+W','Mod+ENTER','Mod+TAB','Mod+W']);
+
+  function normalizeShortcutValue(value){
+    if(typeof value!=='string' || !value.trim()) return '';
+    const parts=value.split('+').map(part=>part.trim()).filter(Boolean), key=(parts.pop()||'').toUpperCase();
+    const aliases={CTRL:'Mod',CONTROL:'Mod',META:'Mod',CMD:'Mod',COMMAND:'Mod',OPTION:'Alt'};
+    const modifiers=new Set();
+    for(const part of parts){
+      const modifier=aliases[part.toUpperCase()]||part[0]?.toUpperCase()+part.slice(1).toLowerCase();
+      if(!['Mod','Alt','Shift'].includes(modifier)) return '';
+      modifiers.add(modifier);
+    }
+    if(!key || (!modifiers.has('Mod')&&!modifiers.has('Alt'))) return '';
+    const ordered=['Mod','Alt','Shift'].filter(modifier=>modifiers.has(modifier));
+    return [...ordered,key].join('+');
+  }
+  function normalizeWorkspaceShortcuts(shortcuts){
+    const source=shortcuts&&typeof shortcuts==='object'?shortcuts:{};
+    const normalized={},used=new Set();
+    for(const [action,fallback] of Object.entries(DEFAULT_SHORTCUTS)){
+      const provided=Object.prototype.hasOwnProperty.call(source,action);
+      let value=provided?normalizeShortcutValue(source[action]):fallback;
+      const reserved=RESERVED_SHORTCUTS.has(value)||(value==='Mod+K'&&action!=='search');
+      if(reserved || (value&&used.has(value))) value=fallback;
+      if(RESERVED_SHORTCUTS.has(value)||(value==='Mod+K'&&action!=='search')||used.has(value)) value='';
+      normalized[action]=value;
+      if(value) used.add(value);
+    }
+    return normalized;
+  }
+  function shortcutFromEvent(event){
+    if(event.getModifierState?.('AltGraph')) return '';
+    if(['Control','Meta','Alt','Shift'].includes(event.key)) return '';
+    const key=event.key===' '?'Space':event.key==='+'?'Plus':event.key.length===1?event.key.toUpperCase():event.key.toUpperCase();
+    const modifiers=[];
+    if(event.ctrlKey||event.metaKey) modifiers.push('Mod');
+    if(event.altKey) modifiers.push('Alt');
+    if(event.shiftKey) modifiers.push('Shift');
+    return normalizeShortcutValue([...modifiers,key].join('+'));
+  }
+  function formatShortcut(value){
+    if(!value) return 'Not set';
+    const mac=/Mac|iPhone|iPad/i.test(navigator.platform||'');
+    const keyNames={SPACE:'Space',ESCAPE:'Esc',ARROWUP:'↑',ARROWDOWN:'↓',ARROWLEFT:'←',ARROWRIGHT:'→'};
+    return value.split('+').map(part=>part==='Mod'?(mac?'⌘':'Ctrl'):part==='Alt'?(mac?'⌥':'Alt'):part==='Shift'?(mac?'⇧':'Shift'):(keyNames[part]||part)).join(' + ');
+  }
 
   const DEFAULT_WORKSPACE = {
     name: "StrongCod3r's Space",
     theme: 'system',
+    shortcuts: {...DEFAULT_SHORTCUTS},
     currentPageId: 'welcome',
     activeTabId: 'tab_welcome',
+    activeEditorGroupId: MAIN_EDITOR_GROUP,
+    editorLayout: {type:'group',id:MAIN_EDITOR_GROUP,activeTabId:'tab_welcome'},
     openTabs: [{ id:'tab_welcome', pageId:'welcome' }],
     sidebarOpen: true,
     leftPanelMode: 'files',
@@ -31,7 +93,7 @@
           { id:'b7', type:'h2', text:'Project roadmap' },
           { id:'b8', type:'database', title:'Tasks', columns:['Name','Status','Owner'], rows:[['Polish editor','In progress','You'],['Build templates','Done','You'],['Ship MVP','Next','You']] },
           { id:'b9', type:'h2', text:'Keyboard shortcuts' },
-          { id:'b10', type:'text', text:'Enter creates a block · Backspace on an empty block merges/removes it · Ctrl/Cmd+K opens search · Ctrl/Cmd+Shift+L toggles theme.' }
+          { id:'b10', type:'text', text:'Enter creates a block · Backspace on an empty block merges/removes it · Ctrl/Cmd+K opens search · Ctrl/Cmd+Z undoes · Ctrl/Cmd+Shift+Z redoes. Configure app shortcuts in Settings → Keyboard shortcuts.' }
         ]
       },
       {
@@ -188,8 +250,10 @@
   let emojiTokenEnd = -1;
   let emojiMatches = [];
   let commandIndex = 0;
+  let shortcutCaptureAction = null;
   let dragBlockId = null;
   let dragTabId = null;
+  let dockDrop = null;
   let tableAxisDrag = null;
   let activeImageBlockId = null;
   let activeImageLinkBlockId = null;
@@ -202,6 +266,8 @@
   let tableCellSelection = null;
   let inlineSelectionState = null;
   let inlineSelectionUpdateTimer = null;
+  let inlinePointerSelectionActive = false;
+  let inlineKeyboardSelectionActive = false;
   let saveTimer = null;
   let historyTimer = null;
   let historySuspended = false;
@@ -213,21 +279,22 @@
   const els = {
     sidebar:$('sidebar'), sidebarToggle:$('sidebarToggle'), sidebarOpen:$('sidebarOpen'), rightSidebar:$('rightSidebar'), rightSidebarContent:$('rightSidebarContent'), rightSidebarToggle:$('rightSidebarToggle'),
     favoritesList:$('favoritesList'), pageTree:$('pageTree'), breadcrumbs:$('breadcrumbs'), editorTabs:$('editorTabs'), tabsScroll:$('tabsScroll'),
-    editorView:$('editorView'), homeView:$('homeView'), graphView:$('graphView'), pageTitle:$('pageTitle'), pageIcon:$('pageIcon'),
-    blockEditor:$('blockEditor'), emptyHint:$('emptyHint'), addIconBtn:$('addIconBtn'), addCommentBtn:$('addCommentBtn'), pageComments:$('pageComments'), pageMetaMenu:$('pageMetaMenu'),
-    undoBtn:$('undoBtn'), redoBtn:$('redoBtn'), favoriteBtn:$('favoriteBtn'), commandPalette:$('commandPalette'), commandSearch:$('commandSearch'), commandResults:$('commandResults'),
+    editorView:$('editorView'), editorDock:$('editorDock'), homeView:$('homeView'), graphView:$('graphView'), pageTitle:$('pageTitle'), pageIcon:$('pageIcon'),
+    blockEditor:$('blockEditor'), emptyHint:$('emptyHint'), pageComments:$('pageComments'), pageMetaMenu:$('pageMetaMenu'),
+    commandPalette:$('commandPalette'), commandSearch:$('commandSearch'), commandResults:$('commandResults'),
     slashMenu:$('slashMenu'), slashSearch:$('slashSearch'), slashResults:$('slashResults'), emojiMenu:$('emojiMenu'), emojiResults:$('emojiResults'), blockMenu:$('blockMenu'), textFormatToolbar:$('textFormatToolbar'),
-    shareModal:$('shareModal'), settingsModal:$('settingsModal'), themeToggle:$('themeToggle'),
+    shareModal:$('shareModal'), settingsModal:$('settingsModal'), themeToggle:$('themeToggle'), shortcutList:$('shortcutList'),
     importFile:$('importFile'), imageFileInput:$('imageFileInput'), pageIconFileInput:$('pageIconFileInput'), vaultSelect:$('vaultSelect'), createVaultBtn:$('createVaultBtn'), renameVaultBtn:$('renameVaultBtn'), deleteVaultBtn:$('deleteVaultBtn'),
     vaultDialog:$('vaultDialog'), vaultDialogTitle:$('vaultDialogTitle'), vaultDialogInput:$('vaultDialogInput'), vaultDialogError:$('vaultDialogError'), vaultDialogConfirm:$('vaultDialogConfirm'), toast:$('toast')
   };
+  const baseEditorElements={pageTitle:els.pageTitle,pageIcon:els.pageIcon,pageComments:els.pageComments,blockEditor:els.blockEditor,emptyHint:els.emptyHint};
 
   function makeBlankWorkspace(){
     const pageId=uid('page'), tabId=uid('tab');
     return {
-      name:'', theme:state?.theme || 'system', currentPageId:pageId, activeTabId:tabId,
-      openTabs:[{id:tabId,pageId}], sidebarOpen:true, rightSidebarOpen:true,
-      leftPanelMode:'files', rightPanelMode:'outline', mainView:'page', sidebarWidth:276, rightSidebarWidth:286,
+      name:'', theme:state?.theme || 'system', currentPageId:pageId, activeTabId:tabId, activeEditorGroupId:MAIN_EDITOR_GROUP,
+      editorLayout:{type:'group',id:MAIN_EDITOR_GROUP,activeTabId:tabId}, openTabs:[{id:tabId,kind:'page',pageId,groupId:MAIN_EDITOR_GROUP}], sidebarOpen:true, rightSidebarOpen:true,
+      leftPanelMode:'files', rightPanelMode:'outline', mainView:'page', sidebarWidth:276, rightSidebarWidth:286, shortcuts:{...DEFAULT_SHORTCUTS},
       pages:[{id:pageId,parentId:null,title:'Untitled',icon:'📄',favorite:false,expanded:true,blocks:[newTextBlock()]}]
     };
   }
@@ -236,33 +303,62 @@
     if (!parsed?.pages?.length) parsed=clone(DEFAULT_WORKSPACE);
     parsed.pages.forEach(p => { if ('cover' in p) delete p.cover; p.blocks=normalizeBlockTree(p.blocks); });
     const pageIds = new Set(parsed.pages.map(p => p.id));
+    parsed.editorLayout=normalizeEditorLayout(parsed.editorLayout);
+    const groups=editorGroups(parsed.editorLayout);
+    const groupIds=new Set(groups.map(group=>group.id));
+    const fallbackGroup=groups[0].id;
     if (!['page','graph'].includes(parsed.mainView)) parsed.mainView = 'page';
     if (!Array.isArray(parsed.openTabs)) parsed.openTabs = [];
     parsed.openTabs = parsed.openTabs.map(tab => {
-      if (typeof tab === 'string') return pageIds.has(tab) ? {id:uid('tab'),kind:'page',pageId:tab} : null;
+      if (typeof tab === 'string') return pageIds.has(tab) ? {id:uid('tab'),kind:'page',pageId:tab,groupId:fallbackGroup} : null;
       if (!tab || typeof tab !== 'object') return null;
-      if(tab.kind==='graph' || tab.view==='graph') return {id:tab.id||uid('tab'),kind:'graph'};
+      const groupId=groupIds.has(tab.groupId)?tab.groupId:fallbackGroup;
+      if(tab.kind==='graph' || tab.view==='graph') return {id:tab.id||uid('tab'),kind:'graph',groupId};
       const pageId = tab.pageId || (pageIds.has(tab.id) ? tab.id : null);
-      return pageId && pageIds.has(pageId) ? {id:tab.id && tab.pageId ? tab.id : uid('tab'),kind:'page',pageId} : null;
+      return pageId && pageIds.has(pageId) ? {id:tab.id && tab.pageId ? tab.id : uid('tab'),kind:'page',pageId,groupId} : null;
     }).filter(Boolean);
     if (parsed.currentPageId !== '__home__' && !pageIds.has(parsed.currentPageId)) parsed.currentPageId = parsed.openTabs.find(t=>t.kind!=='graph'&&t.pageId)?.pageId || parsed.pages[0].id;
     if(parsed.mainView==='graph'){
       let active=parsed.openTabs.find(t=>t.id===parsed.activeTabId && t.kind==='graph') || parsed.openTabs.find(t=>t.kind==='graph');
-      if(!active){ active={id:uid('tab'),kind:'graph'}; parsed.openTabs.push(active); }
+      if(!active){ active={id:uid('tab'),kind:'graph',groupId:fallbackGroup}; parsed.openTabs.push(active); }
       parsed.activeTabId=active.id;
     } else if (parsed.currentPageId !== '__home__') {
       let active = parsed.openTabs.find(t => t.id === parsed.activeTabId && t.kind!=='graph' && t.pageId === parsed.currentPageId) || parsed.openTabs.find(t => t.kind!=='graph' && t.pageId === parsed.currentPageId);
-      if (!active) { active={id:uid('tab'),kind:'page',pageId:parsed.currentPageId}; parsed.openTabs.push(active); }
+      if (!active) { active={id:uid('tab'),kind:'page',pageId:parsed.currentPageId,groupId:fallbackGroup}; parsed.openTabs.push(active); }
       parsed.activeTabId = active.id;
     } else parsed.activeTabId = null;
+    const activeTab=parsed.openTabs.find(tab=>tab.id===parsed.activeTabId);
+    parsed.activeEditorGroupId=activeTab?.groupId || (groupIds.has(parsed.activeEditorGroupId)?parsed.activeEditorGroupId:fallbackGroup);
+    for(const group of groups){
+      const tabs=parsed.openTabs.filter(tab=>tab.groupId===group.id);
+      if(!tabs.some(tab=>tab.id===group.activeTabId)) group.activeTabId=tabs[0]?.id||null;
+    }
+    if(activeTab) editorGroup(parsed.editorLayout,activeTab.groupId).activeTabId=activeTab.id;
     if (typeof parsed.sidebarOpen !== 'boolean') parsed.sidebarOpen = true;
     if (typeof parsed.rightSidebarOpen !== 'boolean') parsed.rightSidebarOpen = true;
     if (!['files','favorites'].includes(parsed.leftPanelMode)) parsed.leftPanelMode = 'files';
     if (!['outline','backlinks'].includes(parsed.rightPanelMode)) parsed.rightPanelMode = 'outline';
     if (!Number.isFinite(parsed.sidebarWidth)) parsed.sidebarWidth = 276;
     if (!Number.isFinite(parsed.rightSidebarWidth)) parsed.rightSidebarWidth = 286;
+    parsed.shortcuts=normalizeWorkspaceShortcuts(parsed.shortcuts);
     return parsed;
   }
+
+  function normalizeEditorLayout(node,seen=new Set()){
+    if(node?.type==='split' && node.first && node.second){
+      return {type:'split',direction:node.direction==='column'?'column':'row',ratio:Math.max(.2,Math.min(.8,Number(node.ratio)||.5)),first:normalizeEditorLayout(node.first,seen),second:normalizeEditorLayout(node.second,seen)};
+    }
+    let id=typeof node?.id==='string'&&node.id?node.id:MAIN_EDITOR_GROUP;
+    if(seen.has(id)) id=uid('editor_group');
+    seen.add(id);
+    return {type:'group',id,activeTabId:node?.activeTabId||null};
+  }
+  function editorGroups(node,out=[]){
+    if(node?.type==='split'){ editorGroups(node.first,out); editorGroups(node.second,out); }
+    else if(node?.type==='group') out.push(node);
+    return out;
+  }
+  function editorGroup(node,id){ return editorGroups(node).find(group=>group.id===id)||null; }
 
   function openStorageDb(){
     if(storageDbPromise) return storageDbPromise;
@@ -417,7 +513,6 @@
       const history=historyByVault.get(vaultId);
       history.present=clone(state); history.pending=null;
     }
-    updateHistoryButtons();
   }
 
   function pushUndoSnapshot(history,snapshot){
@@ -434,7 +529,6 @@
       history.present=clone(after);
       history.redo=[];
     }
-    updateHistoryButtons();
   }
 
   function recordHistory(mode='immediate'){
@@ -447,7 +541,6 @@
       clearTimeout(historyTimer);
       const vaultId=activeVaultId;
       historyTimer=setTimeout(()=>flushHistoryPending(vaultId),HISTORY_MERGE_DELAY);
-      updateHistoryButtons();
       return;
     }
     flushHistoryPending(activeVaultId);
@@ -456,21 +549,12 @@
       history.present=current;
       history.redo=[];
     }
-    updateHistoryButtons();
   }
 
   function scheduleSave(mode='immediate'){
     recordHistory(mode);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(persistStateNow, 120);
-  }
-
-  function updateHistoryButtons(){
-    const history=historyByVault.get(activeVaultId);
-    const canUndo=!!history && (history.undo.length>0 || !!history.pending);
-    const canRedo=!!history && history.redo.length>0;
-    if(els.undoBtn){ els.undoBtn.disabled=!canUndo; els.undoBtn.title=canUndo?'Undo (Ctrl/Cmd+Z)':'Nothing to undo'; }
-    if(els.redoBtn){ els.redoBtn.disabled=!canRedo; els.redoBtn.title=canRedo?'Redo (Ctrl/Cmd+Shift+Z / Ctrl+Y)':'Nothing to redo'; }
   }
 
   function undoWorkspace(){
@@ -482,7 +566,7 @@
     state=normalizeWorkspace(clone(previous));
     history.present=clone(state); history.pending=null;
     persistStateNow(); applyTheme(); renderAll();
-    historySuspended=false; updateHistoryButtons(); toast('Undo');
+    historySuspended=false; toast('Undo');
   }
 
   function redoWorkspace(){
@@ -494,7 +578,7 @@
     state=normalizeWorkspace(clone(next));
     history.present=clone(state); history.pending=null;
     persistStateNow(); applyTheme(); renderAll();
-    historySuspended=false; updateHistoryButtons(); toast('Redo');
+    historySuspended=false; toast('Redo');
   }
 
   function renderVaultSelector(){
@@ -605,37 +689,147 @@
     }
   }
 
+  function groupTabs(groupId){ return state.openTabs.filter(tab=>tab.groupId===groupId); }
+  function selectedGroupTab(group){
+    const tabs=groupTabs(group.id);
+    return tabs.find(tab=>tab.id===group.activeTabId)||tabs[0]||null;
+  }
+  function bindEditorElements(root){
+    const mapping={pageTitle:'[data-dock-title]',pageIcon:'[data-dock-icon]',pageComments:'[data-dock-comments]',blockEditor:'[data-dock-blocks]',emptyHint:'[data-dock-empty]'};
+    for(const [key,selector] of Object.entries(mapping)) els[key]=root?.querySelector(selector)||baseEditorElements[key];
+  }
+  function focusEditorGroup(groupId){
+    const group=editorGroup(state.editorLayout,groupId); if(!group) return;
+    const tab=selectedGroupTab(group); if(!tab) return;
+    if(tab.kind==='graph') return;
+    if(state.activeEditorGroupId===groupId && state.activeTabId===tab.id) return;
+    cancelPageOperations();
+    state.activeEditorGroupId=groupId; state.activeTabId=tab.id;
+    if(tab.kind==='page'){ state.currentPageId=tab.pageId; state.mainView='page'; }
+    bindEditorElements([...els.editorDock.querySelectorAll('[data-dock-page]')].find(root=>root.dataset.editorGroup===groupId));
+    els.editorDock.querySelectorAll('.dock-pane').forEach(pane=>pane.classList.toggle('active',pane.dataset.editorGroup===groupId));
+    renderTabs(); renderSidebar();
+    if(tab.kind==='page'){
+      const page=pageById(tab.pageId); renderBreadcrumbs(page);
+    }
+    renderRightSidebar();
+  }
+  function dockTabMarkup(tab,active){
+    const page=tab.kind==='page'?pageById(tab.pageId):null;
+    const title=page?.title|| (tab.kind==='graph'?'Graph view':'Untitled');
+    return `<div class="dock-tab ${active?'active':''}" role="tab" aria-selected="${active}" data-tab-id="${tab.id}" draggable="true"><span class="tab-icon">${page?pageIconMarkup(page.icon):'◇'}</span><span class="tab-title">${escapeHtml(title)}</span><button type="button" class="tab-close" data-tab-close="${tab.id}" title="Close ${escapeHtml(title)}">×</button></div>`;
+  }
+  function dockGroupMarkup(group){
+    const tabs=groupTabs(group.id), selected=selectedGroupTab(group), page=selected?.kind==='page'?pageById(selected.pageId):null;
+    const content=page?`<div class="dock-scroll"><article class="page dock-page" data-dock-page data-editor-group="${group.id}" data-page-id="${page.id}"><div class="note-inline-header"><button class="page-icon ${page.icon?'':'hidden'}" data-dock-icon title="Change icon">${page.icon?pageIconMarkup(page.icon,''):''}</button><h1 class="page-title" contenteditable="true" spellcheck="true" data-dock-title data-placeholder="Untitled">${escapeHtml(page.title||'')}</h1></div><div class="page-comments hidden" data-dock-comments></div><div class="block-editor" data-dock-blocks></div><div class="empty-hint" data-dock-empty>Type <b>/</b> for commands</div></article></div>`:'<div class="dock-empty">Drag a page tab here or press Ctrl/Cmd+Alt+N to create one.</div>';
+    return `<section class="dock-pane ${state.activeEditorGroupId===group.id?'active':''}" data-editor-group="${group.id}"><div class="dock-tabs"><div class="dock-tabs-scroll" role="tablist" aria-label="Open pages in pane">${tabs.map(tab=>dockTabMarkup(tab,tab.id===selected?.id)).join('')}</div><div class="dock-tab-spacer"></div></div><nav class="dock-breadcrumbs breadcrumbs" aria-label="Page path">${page?breadcrumbMarkup(page):''}</nav>${content}</section>`;
+  }
+  function dockNodeMarkup(node){
+    if(node.type==='group') return dockGroupMarkup(node);
+    return `<div class="dock-split ${node.direction}" data-dock-split style="--first-size:${Math.round(node.ratio*100)}%"><div class="dock-branch">${dockNodeMarkup(node.first)}</div><div class="dock-divider" data-dock-divider role="separator" aria-orientation="${node.direction==='row'?'vertical':'horizontal'}" title="Drag to resize"></div><div class="dock-branch">${dockNodeMarkup(node.second)}</div></div>`;
+  }
+  function renderDockLayout(){
+    els.homeView.classList.add('hidden'); els.graphView?.classList.add('hidden'); els.editorView.classList.add('hidden'); els.editorDock.classList.remove('hidden');
+    els.editorDock.innerHTML=dockNodeMarkup(state.editorLayout);
+    els.editorDock.querySelectorAll('[data-dock-page]').forEach(root=>{
+      const page=pageById(root.dataset.pageId), blocks=root.querySelector('[data-dock-blocks]');
+      if(page && blocks){ if(!page.blocks.length) page.blocks.push(newTextBlock()); blocks.innerHTML=page.blocks.map((block,index)=>blockHTML(block,index,page.blocks)).join(''); root.querySelector('[data-dock-empty]').style.display='none'; }
+    });
+    const active=[...els.editorDock.querySelectorAll('[data-dock-page]')].find(root=>root.dataset.editorGroup===state.activeEditorGroupId);
+    bindEditorElements(active);
+    if(active) scheduleMermaidPreviews(active.querySelector('[data-dock-blocks]'));
+    const page=currentPage(); if(page) renderBreadcrumbs(page);
+    requestAnimationFrame(syncAllSimpleTableHandles);
+  }
+  function replaceGroupNode(node,id,replacement){
+    if(node.type==='group') return node.id===id?replacement:node;
+    node.first=replaceGroupNode(node.first,id,replacement); node.second=replaceGroupNode(node.second,id,replacement); return node;
+  }
+  function removeGroupNode(node,id){
+    if(node.type==='group') return node.id===id?null:node;
+    const first=removeGroupNode(node.first,id), second=removeGroupNode(node.second,id);
+    if(!first) return second; if(!second) return first;
+    node.first=first; node.second=second; return node;
+  }
+  function repairEditorGroups(){
+    for(const group of editorGroups(state.editorLayout)){
+      const tabs=groupTabs(group.id);
+      if(!tabs.some(tab=>tab.id===group.activeTabId)) group.activeTabId=tabs[0]?.id||null;
+    }
+    for(const group of [...editorGroups(state.editorLayout)]){
+      if(editorGroups(state.editorLayout).length>1 && !groupTabs(group.id).length) state.editorLayout=removeGroupNode(state.editorLayout,group.id);
+    }
+    const active=state.openTabs.find(tab=>tab.id===state.activeTabId);
+    if(!active){ const group=editorGroups(state.editorLayout)[0], next=selectedGroupTab(group); state.activeEditorGroupId=group.id; state.activeTabId=next?.id||null; if(next?.kind==='page') state.currentPageId=next.pageId; }
+    else state.activeEditorGroupId=active.groupId;
+  }
+  function splitTab(tabId,targetGroupId,edge){
+    let tab=state.openTabs.find(item=>item.id===tabId); const target=editorGroup(state.editorLayout,targetGroupId);
+    if(!tab||!target||tab.kind!=='page') return;
+    const sourceId=tab.groupId;
+    // A single tab can display the same page in two panes, as in Obsidian.
+    if(sourceId===targetGroupId && groupTabs(sourceId).length===1){ tab={...tab,id:uid('tab')}; state.openTabs.push(tab); }
+    const newGroup={type:'group',id:uid('editor_group'),activeTabId:tab.id};
+    const oldGroup={...target};
+    state.editorLayout=replaceGroupNode(state.editorLayout,targetGroupId,{type:'split',direction:edge==='left'||edge==='right'?'row':'column',ratio:.5,first:edge==='left'||edge==='top'?newGroup:oldGroup,second:edge==='left'||edge==='top'?oldGroup:newGroup});
+    tab.groupId=newGroup.id;
+    state.activeEditorGroupId=newGroup.id; state.activeTabId=tab.id; state.currentPageId=tab.pageId; state.mainView='page';
+    repairEditorGroups(); scheduleSave(); renderAll();
+  }
+  function moveTabToGroup(tabId,groupId,beforeTabId=null){
+    const tab=state.openTabs.find(item=>item.id===tabId), group=editorGroup(state.editorLayout,groupId); if(!tab||!group) return;
+    if(tab.groupId===groupId && beforeTabId===tabId) return;
+    state.openTabs=state.openTabs.filter(item=>item.id!==tabId); tab.groupId=groupId;
+    const index=beforeTabId?state.openTabs.findIndex(item=>item.id===beforeTabId):-1;
+    state.openTabs.splice(index<0?state.openTabs.length:index,0,tab);
+    group.activeTabId=tab.id; state.activeEditorGroupId=groupId; state.activeTabId=tab.id;
+    if(tab.kind==='page'){ state.currentPageId=tab.pageId; state.mainView='page'; }
+    else state.mainView='graph';
+    repairEditorGroups(); scheduleSave(); renderAll();
+  }
+  function splitActiveTab(edge){ if(state.activeTabId) splitTab(state.activeTabId,state.activeEditorGroupId,edge); }
+  function resetEditorLayout(){
+    state.editorLayout={type:'group',id:MAIN_EDITOR_GROUP,activeTabId:state.activeTabId};
+    state.openTabs.forEach(tab=>{ tab.groupId=MAIN_EDITOR_GROUP; });
+    state.activeEditorGroupId=MAIN_EDITOR_GROUP; scheduleSave(); renderAll();
+  }
+
   function renderAll(){
+    const docked=state.mainView==='page' && state.currentPageId!=='__home__' && editorGroups(state.editorLayout).length>1;
+    els.editorTabs.parentElement.classList.toggle('docked',docked);
     renderVaultSelector();
     renderSidebar();
     renderTabs();
-    if(state.mainView==='graph') renderGraphView(); else if (state.currentPageId === '__home__') renderHome(); else renderPage();
+    if(state.mainView==='graph') renderGraphView(); else if (state.currentPageId === '__home__') renderHome(); else if(docked) renderDockLayout(); else renderPage();
     renderRightSidebar();
     updateWorkspaceChrome();
-    updateHistoryButtons();
   }
 
   function renderTabs(){
     if (!els.tabsScroll) return;
     const validIds = new Set(state.pages.map(p => p.id));
+    const validGroups=new Set(editorGroups(state.editorLayout).map(group=>group.id));
+    const fallbackGroup=validGroups.has(state.activeEditorGroupId)?state.activeEditorGroupId:editorGroups(state.editorLayout)[0].id;
     if (!Array.isArray(state.openTabs)) state.openTabs = [];
     state.openTabs = state.openTabs.map(tab => {
-      if(typeof tab==='string') return validIds.has(tab)?{id:uid('tab'),kind:'page',pageId:tab}:null;
+      if(typeof tab==='string') return validIds.has(tab)?{id:uid('tab'),kind:'page',pageId:tab,groupId:fallbackGroup}:null;
       if(!tab||typeof tab!=='object') return null;
-      if(tab.kind==='graph'||tab.view==='graph') return {id:tab.id||uid('tab'),kind:'graph'};
-      return validIds.has(tab.pageId)?{id:tab.id||uid('tab'),kind:'page',pageId:tab.pageId}:null;
+      const groupId=validGroups.has(tab.groupId)?tab.groupId:fallbackGroup;
+      if(tab.kind==='graph'||tab.view==='graph') return {id:tab.id||uid('tab'),kind:'graph',groupId};
+      return validIds.has(tab.pageId)?{id:tab.id||uid('tab'),kind:'page',pageId:tab.pageId,groupId}:null;
     }).filter(Boolean);
 
     if(state.mainView==='graph'){
       let active=state.openTabs.find(t=>t.id===state.activeTabId&&t.kind==='graph') || state.openTabs.find(t=>t.kind==='graph');
-      if(!active){ active={id:uid('tab'),kind:'graph'}; state.openTabs.push(active); }
-      state.activeTabId=active.id;
+      if(!active){ active={id:uid('tab'),kind:'graph',groupId:fallbackGroup}; state.openTabs.push(active); }
+      state.activeTabId=active.id; state.activeEditorGroupId=active.groupId;
     } else if (state.currentPageId === '__home__') state.activeTabId = null;
     else if (validIds.has(state.currentPageId)) {
       let active = state.openTabs.find(t => t.id === state.activeTabId && t.kind!=='graph' && t.pageId === state.currentPageId);
       if (!active) active = state.openTabs.find(t => t.kind!=='graph' && t.pageId === state.currentPageId);
-      if (!active) { active={id:uid('tab'),kind:'page',pageId:state.currentPageId}; state.openTabs.push(active); }
-      state.activeTabId = active.id;
+      if (!active) { active={id:uid('tab'),kind:'page',pageId:state.currentPageId,groupId:fallbackGroup}; state.openTabs.push(active); }
+      state.activeTabId = active.id; state.activeEditorGroupId=active.groupId;
+      editorGroup(state.editorLayout,active.groupId).activeTabId=active.id;
     }
 
     els.tabsScroll.innerHTML = state.openTabs.length ? state.openTabs.map(tab => {
@@ -647,11 +841,11 @@
     requestAnimationFrame(() => els.tabsScroll.querySelector('.editor-tab.active')?.scrollIntoView({block:'nearest', inline:'nearest'}));
   }
 
-  function createTab(pageId, activate=true){
+  function createTab(pageId, activate=true, groupId=state.activeEditorGroupId){
     if (!pageById(pageId)) return null;
     if (!Array.isArray(state.openTabs)) state.openTabs=[];
-    const tab={id:uid('tab'),kind:'page',pageId}; state.openTabs.push(tab);
-    if (activate){ cancelPageOperations(); state.activeTabId=tab.id; state.currentPageId=pageId; state.mainView='page'; }
+    const tab={id:uid('tab'),kind:'page',pageId,groupId}; state.openTabs.push(tab);
+    if (activate){ cancelPageOperations(); state.activeEditorGroupId=groupId; editorGroup(state.editorLayout,groupId).activeTabId=tab.id; state.activeTabId=tab.id; state.currentPageId=pageId; state.mainView='page'; }
     return tab;
   }
 
@@ -661,11 +855,13 @@
     const tab=state.openTabs.find(t=>t.id===state.activeTabId);
     if (!tab || tab.kind==='graph') return createTab(pageId,true);
     if(tab.pageId!==pageId || state.currentPageId!==pageId) cancelPageOperations();
-    tab.kind='page'; tab.pageId=pageId; state.currentPageId=pageId; state.mainView='page'; return tab;
+    tab.kind='page'; tab.pageId=pageId; state.activeEditorGroupId=tab.groupId; editorGroup(state.editorLayout,tab.groupId).activeTabId=tab.id; state.currentPageId=pageId; state.mainView='page'; return tab;
   }
 
   function activateTab(tabId){
     const tab=(state.openTabs||[]).find(t=>t.id===tabId); if(!tab)return;
+    state.activeEditorGroupId=tab.groupId;
+    editorGroup(state.editorLayout,tab.groupId).activeTabId=tab.id;
     if(tab.kind==='graph'){
       if(state.activeTabId!==tab.id || state.mainView!=='graph') cancelPageOperations();
       state.activeTabId=tab.id; state.mainView='graph'; scheduleSave(); renderAll(); return;
@@ -680,18 +876,20 @@
     const index = state.openTabs.findIndex(t=>t.id===tabId);
     if (index < 0) return;
     const wasActive=state.activeTabId===tabId;
+    const groupId=state.openTabs[index].groupId;
     if(wasActive) cancelPageOperations();
     state.openTabs.splice(index, 1);
     if (wasActive){
-      const next=state.openTabs[Math.min(index,state.openTabs.length-1)] || null;
+      const next=groupTabs(groupId)[0] || state.openTabs[Math.min(index,state.openTabs.length-1)] || null;
       if(next?.kind==='graph'){
-        state.activeTabId=next.id; state.mainView='graph';
+        state.activeEditorGroupId=next.groupId; state.activeTabId=next.id; state.mainView='graph';
       }else if(next?.pageId && pageById(next.pageId)){
-        state.activeTabId=next.id; state.currentPageId=next.pageId; state.mainView='page';
+        state.activeEditorGroupId=next.groupId; state.activeTabId=next.id; state.currentPageId=next.pageId; state.mainView='page';
       }else{
         state.activeTabId=null; state.currentPageId='__home__'; state.mainView='page';
       }
     }
+    repairEditorGroups();
     scheduleSave(); renderAll();
   }
 
@@ -705,9 +903,9 @@
   function openGraphTab(){
     if(!Array.isArray(state.openTabs)) state.openTabs=[];
     let tab=state.openTabs.find(t=>t.kind==='graph');
-    if(!tab){ tab={id:uid('tab'),kind:'graph'}; state.openTabs.push(tab); }
+    if(!tab){ tab={id:uid('tab'),kind:'graph',groupId:state.activeEditorGroupId}; state.openTabs.push(tab); }
     if(state.activeTabId!==tab.id || state.mainView!=='graph') cancelPageOperations();
-    state.activeTabId=tab.id; state.mainView='graph'; scheduleSave(); renderAll();
+    state.activeEditorGroupId=tab.groupId; editorGroup(state.editorLayout,tab.groupId).activeTabId=tab.id; state.activeTabId=tab.id; state.mainView='graph'; scheduleSave(); renderAll();
     return tab;
   }
 
@@ -719,9 +917,10 @@
     els.sidebar?.classList.toggle('collapsed', !state.sidebarOpen);
     els.sidebarOpen?.classList.toggle('hidden', state.sidebarOpen);
     els.rightSidebar?.classList.toggle('collapsed', !state.rightSidebarOpen);
+    els.editorTabs?.parentElement.classList.toggle('right-sidebar-collapsed', !state.rightSidebarOpen);
     document.querySelector('.left-resizer')?.classList.toggle('hidden-resizer', !state.sidebarOpen);
     document.querySelector('.right-resizer')?.classList.toggle('hidden-resizer', !state.rightSidebarOpen);
-    if (els.rightSidebarToggle) els.rightSidebarToggle.textContent = state.rightSidebarOpen ? '◨' : '◧';
+    if (els.rightSidebarToggle){ els.rightSidebarToggle.textContent = state.rightSidebarOpen ? '◨' : '◧'; els.rightSidebarToggle.setAttribute('aria-expanded',String(state.rightSidebarOpen)); }
     document.querySelectorAll('[data-ribbon-action="files"],[data-ribbon-action="favorites"]').forEach(btn=>{
       btn.classList.toggle('active', state.sidebarOpen && btn.dataset.ribbonAction===state.leftPanelMode);
       btn.setAttribute('aria-pressed', btn.classList.contains('active') ? 'true' : 'false');
@@ -919,6 +1118,7 @@
   }
 
   function renderGraphView(){
+    els.editorDock?.classList.add('hidden'); bindEditorElements(null);
     els.editorView.classList.add('hidden'); els.homeView.classList.add('hidden'); els.graphView?.classList.remove('hidden');
     els.breadcrumbs.innerHTML='<span class="crumb">Graph view</span>';
     const graph=buildPageGraph(), positions=graphLayout(graph);
@@ -939,6 +1139,7 @@
   }
 
   function renderHome(){
+    els.editorDock?.classList.add('hidden'); bindEditorElements(null);
     els.graphView?.classList.add('hidden');
     els.editorView.classList.add('hidden');
     els.homeView.classList.remove('hidden');
@@ -955,6 +1156,7 @@
   }
 
   function renderPage(){
+    els.editorDock?.classList.add('hidden'); bindEditorElements(null);
     els.graphView?.classList.add('hidden');
     const page = currentPage();
     if (!page) return;
@@ -964,28 +1166,40 @@
     els.pageTitle.textContent = page.title || '';
     els.pageIcon.innerHTML = page.icon ? pageIconMarkup(page.icon,'') : '';
     els.pageIcon.classList.toggle('hidden', !page.icon);
-    els.addIconBtn.textContent = page.icon ? 'Change icon' : 'Add icon';
-    const commentCount=(page.comments||[]).length;
-    els.addCommentBtn.textContent = commentCount ? `Comments ${commentCount}` : 'Add comment';
     els.pageComments.classList.add('hidden');
-    els.favoriteBtn.textContent = page.favorite ? '★' : '☆';
-    els.favoriteBtn.title = page.favorite ? 'Remove from favorites' : 'Add to favorites';
     renderBlocks(page);
   }
 
-  function renderBreadcrumbs(page){
+  function breadcrumbMarkup(page){
     const chain=[]; let cur=page;
     while(cur){ chain.unshift(cur); cur=cur.parentId?pageById(cur.parentId):null; }
-    els.breadcrumbs.innerHTML = chain.map((p,i) => `<span class="crumb" data-crumb-id="${p.id}"><span class="crumb-icon">${pageIconMarkup(p.icon)}</span>${escapeHtml(p.title||'Untitled')}</span>${i<chain.length-1?'<span class="crumb-sep">/</span>':''}`).join('');
+    return chain.map((p,i) => `<span class="crumb" data-crumb-id="${p.id}"><span class="crumb-icon">${pageIconMarkup(p.icon)}</span>${escapeHtml(p.title||'Untitled')}</span>${i<chain.length-1?'<span class="crumb-sep">/</span>':''}`).join('');
+  }
+  function renderBreadcrumbs(page){
+    els.breadcrumbs.innerHTML=breadcrumbMarkup(page);
+    if(!els.editorDock?.classList.contains('hidden')) els.editorDock.querySelectorAll('.dock-pane').forEach(pane=>{
+      const group=editorGroup(state.editorLayout,pane.dataset.editorGroup), tab=group&&selectedGroupTab(group);
+      if(tab?.pageId===page.id) pane.querySelector('.dock-breadcrumbs').innerHTML=breadcrumbMarkup(page);
+    });
   }
 
   function renderBlocks(page){
     if (!page.blocks.length) page.blocks.push(newTextBlock());
     els.blockEditor.innerHTML = page.blocks.map((b,i) => blockHTML(b,i,page.blocks)).join('');
     els.emptyHint.style.display = 'none';
-    scheduleMermaidPreviews();
+    scheduleMermaidPreviews(els.blockEditor);
+    if(els.editorDock && !els.editorDock.classList.contains('hidden')) refreshOtherDockPages(page.id);
     requestAnimationFrame(syncAllSimpleTableHandles);
     if(page.id===state.currentPageId) renderRightSidebar();
+  }
+
+  function refreshOtherDockPages(pageId){
+    const page=pageById(pageId); if(!page) return;
+    els.editorDock.querySelectorAll('[data-dock-page]').forEach(root=>{
+      if(root.dataset.pageId!==pageId || root.dataset.editorGroup===state.activeEditorGroupId) return;
+      const blocks=root.querySelector('[data-dock-blocks]');
+      if(blocks) blocks.innerHTML=page.blocks.map((block,index)=>blockHTML(block,index,page.blocks)).join('');
+    });
   }
 
   function blockHTML(block, index, blocks){
@@ -2527,14 +2741,49 @@
     if(clear) inlineSelectionState=null;
   }
 
+  function onInlineSelectionPointerDown(event){
+    if(event.button!==0 || !event.target.closest?.('.block-content[contenteditable="true"]')) return;
+    inlinePointerSelectionActive=true;
+    clearTimeout(inlineSelectionUpdateTimer);
+    hideTextFormatToolbar();
+  }
+
+  function onInlineSelectionPointerEnd(){
+    if(!inlinePointerSelectionActive) return;
+    inlinePointerSelectionActive=false;
+    scheduleTextFormatToolbarFromSelection();
+  }
+
+  function onInlineSelectionKeyDown(event){
+    if(!event.shiftKey || !event.target.closest?.('.block-content[contenteditable="true"]') || !['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown'].includes(event.key)) return;
+    inlineKeyboardSelectionActive=true;
+    clearTimeout(inlineSelectionUpdateTimer);
+    hideTextFormatToolbar();
+  }
+
+  function onInlineSelectionKeyUp(event){
+    if(!inlineKeyboardSelectionActive || (event.key!=='Shift' && event.shiftKey)) return;
+    inlineKeyboardSelectionActive=false;
+    scheduleTextFormatToolbarFromSelection();
+  }
+
+  function onInlineSelectionInteractionBlur(){
+    inlinePointerSelectionActive=false;
+    inlineKeyboardSelectionActive=false;
+    scheduleTextFormatToolbarFromSelection();
+  }
+
   function scheduleTextFormatToolbarFromSelection(){
     clearTimeout(inlineSelectionUpdateTimer);
+    if(inlinePointerSelectionActive || inlineKeyboardSelectionActive) return;
     inlineSelectionUpdateTimer=setTimeout(()=>{
+      inlineSelectionUpdateTimer=null;
+      if(inlinePointerSelectionActive || inlineKeyboardSelectionActive) return;
       if(els.textFormatToolbar?.contains(document.activeElement)) return;
       if(multiBlockSelection?.active){ hideTextFormatToolbar(); return; }
       const selection=captureInlineSelection();
       if(selection) showTextFormatToolbar(selection); else hideTextFormatToolbar();
-    },0);
+    },100);
   }
 
   function restoreInlineSelection(selection=inlineSelectionState,{show=true}={}){
@@ -2658,9 +2907,16 @@
     document.addEventListener('click', onClick);
     document.addEventListener('auxclick', onAuxClick);
     document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('pointerdown', onInlineSelectionPointerDown, true);
+    document.addEventListener('pointerup', onInlineSelectionPointerEnd, true);
+    document.addEventListener('pointercancel', onInlineSelectionPointerEnd, true);
+    document.addEventListener('keydown', onInlineSelectionKeyDown, true);
+    document.addEventListener('keyup', onInlineSelectionKeyUp, true);
     document.addEventListener('pointerdown', onPaneResizeStart);
     document.addEventListener('pointermove', onSimpleTableHandlePointerMove, true);
     document.addEventListener('input', onInput);
+    document.addEventListener('input', e=>{ if(e.target.closest?.('[data-dock-page]')) refreshOtherDockPages(state.currentPageId); });
+    document.addEventListener('focusin', e=>{ const pane=e.target.closest?.('.dock-pane[data-editor-group]'); if(pane) focusEditorGroup(pane.dataset.editorGroup); });
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('change', onChange);
     document.addEventListener('dragstart', onDragStart);
@@ -2674,6 +2930,7 @@
     document.addEventListener('selectionchange', scheduleTextFormatToolbarFromSelection);
     document.addEventListener('wheel', onGraphWheel, {passive:false});
     document.addEventListener('dragend', clearDragState);
+    window.addEventListener('blur', onInlineSelectionInteractionBlur);
     document.addEventListener('scroll', e=>{ if(e.target?.matches?.('[data-code-editor]')) syncCodeScroll(e.target); if(e.target?.matches?.('.simple-table-scroll')) syncSimpleTableHandles(e.target.closest('.simple-table-block')); if(multiBlockSelection?.active) renderMultiBlockSelection(); }, true);
     window.addEventListener('resize', ()=>{ hideFloatingMenus(); hideTextFormatToolbar(); updateSidebarOverflow(); syncAllSimpleTableHandles(); if(multiBlockSelection?.active) renderMultiBlockSelection(); if(activeImageCropBlockId) scheduleImageCropDialogLayout(activeImageCropBlockId); });
   }
@@ -2685,6 +2942,24 @@
   }
 
   function onPaneResizeStart(e){
+    const dockDivider=e.target.closest?.('[data-dock-divider]');
+    if(dockDivider && e.button===0){
+      e.preventDefault();
+      const splitElement=dockDivider.closest('[data-dock-split]'), path=[];
+      let node=state.editorLayout, current=splitElement;
+      while(current?.parentElement?.closest('[data-dock-split]')){
+        const parent=current.parentElement.closest('[data-dock-split]');
+        path.unshift(parent.firstElementChild.contains(current)?'first':'second'); current=parent;
+      }
+      for(const branch of path) node=node[branch];
+      const move=event=>{
+        const rect=splitElement.getBoundingClientRect();
+        node.ratio=Math.max(.2,Math.min(.8,node.direction==='row'?(event.clientX-rect.left)/rect.width:(event.clientY-rect.top)/rect.height));
+        splitElement.style.setProperty('--first-size',`${Math.round(node.ratio*100)}%`);
+      };
+      const stop=()=>{ window.removeEventListener('pointermove',move); scheduleSave(); };
+      window.addEventListener('pointermove',move); window.addEventListener('pointerup',stop,{once:true}); return;
+    }
     const handle=e.target.closest('[data-resizer]'); if(!handle || e.button!==0) return;
     e.preventDefault(); const side=handle.dataset.resizer; document.body.classList.add('resizing-pane'); handle.classList.add('resizing');
     const move=ev=>{
@@ -2697,6 +2972,11 @@
   }
 
   function onClick(e){
+    const settingsTab=e.target.closest?.('[data-settings-tab]');
+    if(settingsTab){ setSettingsView(settingsTab.dataset.settingsTab); return; }
+    const shortcutBinding=e.target.closest?.('[data-shortcut-action]');
+    if(shortcutBinding){ shortcutCaptureAction=shortcutBinding.dataset.shortcutAction; renderShortcutSettings(); return; }
+    if(e.target.closest?.('[data-shortcuts-reset]')){ resetShortcuts(); return; }
     if(e.target.closest('#textFormatToolbar')){
       const typeToggle=e.target.closest('[data-format-type-toggle]');
       if(typeToggle){ const menu=els.textFormatToolbar.querySelector('[data-format-type-menu]'); const opening=menu.classList.contains('hidden'); closeTextFormatPopovers(opening?'type':''); menu.classList.toggle('hidden',!opening); return; }
@@ -2724,12 +3004,11 @@
       if(action==='files'||action==='favorites'){
         state.leftPanelMode=action; state.sidebarOpen=true; scheduleSave(); renderSidebar(); updateWorkspaceChrome(); return;
       }
-      if(action==='toggle-right'){ state.rightSidebarOpen=!state.rightSidebarOpen; scheduleSave(); updateWorkspaceChrome(); return; }
       if(action==='search'){ openCommandPalette(); return; }
       if(action==='graph'){ openGraphTab(); return; }
       if(action==='home'){ if(state.currentPageId!=='__home__') cancelPageOperations(); state.mainView='page'; state.currentPageId='__home__'; state.activeTabId=null; scheduleSave(); renderAll(); return; }
       if(action==='new'){ createPage(); return; }
-      if(action==='settings'){ updateSettingsText(); els.settingsModal.classList.remove('hidden'); return; }
+      if(action==='settings'){ openSettings(); return; }
     }
     const rightMode=e.target.closest('[data-right-mode]');
     if(rightMode){ state.rightPanelMode=rightMode.dataset.rightMode; scheduleSave(); renderRightSidebar(); return; }
@@ -2746,9 +3025,8 @@
     if(wikiLink && (e.ctrlKey||e.metaKey)){ e.preventDefault(); e.stopPropagation(); openWikiLink(wikiLink.dataset.wikiPage,wikiLink.dataset.wikiPageTitle,{newTab:e.shiftKey}); return; }
     const tabClose = e.target.closest('[data-tab-close]');
     if (tabClose){ e.stopPropagation(); closeTab(tabClose.dataset.tabClose); return; }
-    const tab = e.target.closest('.editor-tab[data-tab-id]');
+    const tab = e.target.closest('.editor-tab[data-tab-id], .dock-tab[data-tab-id]');
     if (tab){ activateTab(tab.dataset.tabId); return; }
-    if (e.target.closest('#newTabBtn')){ createPage(); return; }
     const pageRow = e.target.closest('.page-tree-row');
     if (pageRow){
       const id=pageRow.dataset.pageId;
@@ -2770,12 +3048,7 @@
     if(e.target.closest('#sidebarToggle')){ state.sidebarOpen=false; scheduleSave(); updateWorkspaceChrome(); return; }
     if(e.target.closest('#sidebarOpen')){ state.sidebarOpen=true; scheduleSave(); updateWorkspaceChrome(); return; }
     if(e.target.closest('#rightSidebarToggle')){ state.rightSidebarOpen=!state.rightSidebarOpen; scheduleSave(); updateWorkspaceChrome(); return; }
-    if(e.target.closest('#undoBtn')){ undoWorkspace(); return; }
-    if(e.target.closest('#redoBtn')){ redoWorkspace(); return; }
-    if(e.target.closest('#favoriteBtn')){ const p=currentPage(); p.favorite=!p.favorite; scheduleSave(); renderSidebar(); els.favoriteBtn.textContent=p.favorite?'★':'☆'; return; }
-    if(e.target.closest('#addIconBtn')||e.target.closest('#pageIcon')){ showIconMenu(e.target.closest('#addIconBtn')||e.target.closest('#pageIcon')); return; }
-    if(e.target.closest('#addCommentBtn')){ openComments(); return; }
-    if(e.target.closest('#shareBtn')){ els.shareModal.classList.remove('hidden'); return; }
+    if(e.target.closest('#pageIcon,[data-dock-icon]')){ showIconMenu(e.target.closest('#pageIcon,[data-dock-icon]')); return; }
     if(e.target.matches('[data-close-modal]')|| (e.target.classList.contains('modal-backdrop'))){ e.target.closest('.modal-backdrop')?.classList.add('hidden'); return; }
     if(e.target.closest('#publishToggle')){ e.target.closest('#publishToggle').classList.toggle('on'); toast('Public sharing updated'); return; }
     if(e.target.closest('#themeToggle')){ cycleTheme(); return; }
@@ -2864,6 +3137,8 @@
   }
 
   function onMouseDown(e){
+    const dockPane=e.target.closest?.('.dock-pane[data-editor-group]');
+    if(dockPane) focusEditorGroup(dockPane.dataset.editorGroup);
     const formatToolbar=e.target.closest?.('#textFormatToolbar');
     if(formatToolbar){
       if(!e.target.matches?.('input,textarea')) e.preventDefault();
@@ -2891,7 +3166,7 @@
       }
     }
     if(e.button!==1) return;
-    if(e.target.closest('.editor-tab[data-tab-id], .page-tree-row [data-action="open-page"], [data-crumb-id], [data-home-page], [data-page-block-open], [data-page-link-open]')) e.preventDefault();
+    if(e.target.closest('.editor-tab[data-tab-id], .dock-tab[data-tab-id], .page-tree-row [data-action="open-page"], [data-crumb-id], [data-home-page], [data-page-block-open], [data-page-link-open]')) e.preventDefault();
   }
 
   function selectableBlockContents(){
@@ -3216,7 +3491,7 @@
     if(inlinePageLink){ const page=pageById(inlinePageLink.dataset.inlinePage); if(page){ e.preventDefault(); openPage(page.id,{newTab:true}); } return; }
     const wikiLink=e.target.closest?.('[data-wiki-page-title]');
     if(wikiLink){ e.preventDefault(); openWikiLink(wikiLink.dataset.wikiPage,wikiLink.dataset.wikiPageTitle,{newTab:true}); return; }
-    const tab=e.target.closest('.editor-tab[data-tab-id]');
+    const tab=e.target.closest('.editor-tab[data-tab-id], .dock-tab[data-tab-id]');
     if(tab){ e.preventDefault(); closeTab(tab.dataset.tabId); return; }
     const pageRow=e.target.closest('.page-tree-row');
     if(pageRow && e.target.closest('[data-action="open-page"]')){ e.preventDefault(); openPage(pageRow.dataset.pageId,{newTab:true}); return; }
@@ -3234,7 +3509,7 @@
     if(e.target.matches?.('[data-format-link-input]')){ renderInlineLinkResults(e.target.value); return; }
     if(e.target.matches?.('[data-graph-search]')){ applyGraphSearch(e.target.value); return; }
     if(e.target.matches?.('[data-page-link-search]')){ renderPageLinkPickerResults(e.target.value); return; }
-    if(e.target===els.pageTitle){ const p=currentPage(); p.title=e.target.innerText.replace(/\n/g,' ') || ''; scheduleSave('merge'); renderSidebar(); renderBreadcrumbs(p); renderTabs(); renderRightSidebar(); return; }
+    if(e.target===els.pageTitle || e.target.matches?.('[data-dock-title]')){ const p=currentPage(); p.title=e.target.innerText.replace(/\n/g,' ') || ''; scheduleSave('merge'); renderSidebar(); renderBreadcrumbs(p); renderTabs(); renderRightSidebar(); if(els.editorDock&&!els.editorDock.classList.contains('hidden')) els.editorDock.querySelectorAll(`.dock-tab[data-tab-id]`).forEach(tab=>{ const item=state.openTabs.find(t=>t.id===tab.dataset.tabId); if(item?.pageId===p.id) tab.querySelector('.tab-title').textContent=p.title||'Untitled'; }); return; }
     if(e.target===els.commandSearch){ commandIndex=0; renderCommandResults(e.target.value); return; }
     if(e.target===els.slashSearch){ slashIndex=0; renderSlashResults(e.target.value); return; }
     if(e.target.matches('[data-icon-search]')){ renderIconPickerResults(e.target.value); return; }
@@ -3293,7 +3568,26 @@
   }
 
   function onKeyDown(e){
+    if(shortcutCaptureAction){
+      if(e.key==='Escape'){ e.preventDefault(); shortcutCaptureAction=null; renderShortcutSettings(); return; }
+      if(['Control','Meta','Alt','Shift'].includes(e.key)) return;
+      e.preventDefault();
+      const action=shortcutCaptureAction;
+      if(e.key==='Backspace'||e.key==='Delete'){
+        state.shortcuts[action]=''; shortcutCaptureAction=null; scheduleSave(); renderShortcutSettings(); return;
+      }
+      const shortcut=shortcutFromEvent(e);
+      if(!shortcut){ toast('Use Ctrl/Cmd or Alt with another key'); return; }
+      if(RESERVED_SHORTCUTS.has(shortcut)||(shortcut==='Mod+K'&&action!=='search')){ toast('That shortcut is reserved by the browser or editor'); return; }
+      const conflict=SHORTCUT_ACTIONS.find(item=>item.id!==action&&state.shortcuts[item.id]===shortcut);
+      if(conflict){ toast(`Already assigned to ${conflict.label}`); return; }
+      state.shortcuts[action]=shortcut; shortcutCaptureAction=null; scheduleSave(); renderShortcutSettings(); return;
+    }
+    const shortcutAction=shortcutActionForEvent(e);
+    const inlineLinkShortcut=shortcutAction==='search'&&shortcutFromEvent(e)==='Mod+K'&&!!e.target.closest?.('.block-content[contenteditable="true"]')&&!!captureInlineSelection();
+    if(shortcutAction&&!inlineLinkShortcut&&!e.repeat){ e.preventDefault(); runShortcutAction(shortcutAction); return; }
     const mod=e.ctrlKey||e.metaKey;
+    if(mod&&e.key.toLowerCase()==='y'&&state.shortcuts.redo===DEFAULT_SHORTCUTS.redo&&!e.repeat){ e.preventDefault(); runShortcutAction('redo'); return; }
     if(e.target.matches?.('[data-format-link-input]')){
       if(e.key==='Enter'){
         e.preventDefault();
@@ -3321,7 +3615,7 @@
       if(e.key==='Enter' && e.target===els.vaultDialogInput){ e.preventDefault(); submitVaultDialog(); return; }
       if(e.key==='Escape'){ e.preventDefault(); closeVaultDialog(); return; }
     }
-    if(e.target===els.pageTitle && e.key==='Enter'){
+    if((e.target===els.pageTitle || e.target.matches?.('[data-dock-title]')) && e.key==='Enter'){
       e.preventDefault();
       const page=currentPage();
       if(!page) return;
@@ -3332,8 +3626,6 @@
       requestAnimationFrame(()=>focusBlock(block.id,0));
       return;
     }
-    if(mod && !e.shiftKey && e.key.toLowerCase()==='z'){ e.preventDefault(); undoWorkspace(); return; }
-    if(mod && ((e.shiftKey && e.key.toLowerCase()==='z') || e.key.toLowerCase()==='y')){ e.preventDefault(); redoWorkspace(); return; }
     if(mod && e.key==='Tab'){ e.preventDefault(); cycleTab(e.shiftKey?-1:1); return; }
     if(mod && e.key.toLowerCase()==='w' && state.activeTabId){ e.preventDefault(); closeTab(state.activeTabId); return; }
     const keyboardInlineSelection=captureInlineSelection();
@@ -3348,8 +3640,6 @@
       if(!e.shiftKey && key==='k'){ e.preventDefault(); showTextFormatToolbar(keyboardInlineSelection); openInlineLinkPopover(); return; }
       if(e.shiftKey && key==='m'){ e.preventDefault(); commentInlineSelection(); return; }
     }
-    if(mod && e.key.toLowerCase()==='k'){ e.preventDefault(); openCommandPalette(); return; }
-    if(mod && e.shiftKey && e.key.toLowerCase()==='l'){ e.preventDefault(); cycleTheme(); return; }
     if(e.key==='Escape'){ hideFloatingMenus(); hideTextFormatToolbar(); document.querySelectorAll('.modal-backdrop').forEach(m=>m.classList.add('hidden')); return; }
     const keyboardGraphNode=e.target.closest?.('[data-graph-page]');
     if(keyboardGraphNode && (e.key==='Enter'||e.key===' ')){ e.preventDefault(); openPage(keyboardGraphNode.dataset.graphPage,{newTab:true}); return; }
@@ -3535,7 +3825,7 @@
         return;
       }
     }
-    const tab=e.target.closest('.editor-tab[data-tab-id]');
+    const tab=e.target.closest('.editor-tab[data-tab-id], .dock-tab[data-tab-id]');
     if(tab && !e.target.closest('.tab-close')){
       dragTabId=tab.dataset.tabId; tab.classList.add('dragging');
       e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain',`tab:${dragTabId}`); return;
@@ -3567,6 +3857,15 @@
     }
     clearExternalIconDropState();
     if(dragTabId){
+      const pane=e.target.closest?.('.dock-pane[data-editor-group]') || e.target.closest?.('#editorView:not(.hidden)');
+      if(pane){
+        e.preventDefault(); if(e.dataTransfer) e.dataTransfer.dropEffect='move';
+        const target=dockTargetAt(e,pane);
+        clearDockIndicators(); dockDrop={...target,groupId:pane.dataset.editorGroup||editorGroups(state.editorLayout)[0].id};
+        pane.classList.add(`dock-drop-${target.edge||'center'}`);
+        return;
+      }
+      clearDockIndicators();
       const strip=e.target.closest('.tabs-scroll'); if(!strip) return; e.preventDefault();
       document.querySelectorAll('.tab-drop-before,.tab-drop-after').forEach(x=>x.classList.remove('tab-drop-before','tab-drop-after'));
       const tab=e.target.closest('.editor-tab[data-tab-id]');
@@ -3620,13 +3919,21 @@
     }
     clearExternalIconDropState();
     if(dragTabId){
+      const pane=e.target.closest?.('.dock-pane[data-editor-group]') || e.target.closest?.('#editorView:not(.hidden)');
+      if(pane){
+        e.preventDefault();
+        const target=dockTargetAt(e,pane), groupId=pane.dataset.editorGroup||editorGroups(state.editorLayout)[0].id;
+        if(target.edge) splitTab(dragTabId,groupId,target.edge);
+        else moveTabToGroup(dragTabId,groupId,target.beforeTabId);
+        clearDragState(); return;
+      }
       const strip=e.target.closest('.tabs-scroll'); if(!strip) return clearDragState(); e.preventDefault();
       const tabs=state.openTabs||[], from=tabs.findIndex(t=>t.id===dragTabId); if(from<0) return clearDragState();
       const target=e.target.closest('.editor-tab[data-tab-id]');
       let to=tabs.length;
       if(target){ const targetIndex=tabs.findIndex(t=>t.id===target.dataset.tabId); const r=target.getBoundingClientRect(); to=targetIndex+(e.clientX>=r.left+r.width/2?1:0); }
       const [moved]=tabs.splice(from,1); if(from<to) to--; tabs.splice(Math.max(0,Math.min(to,tabs.length)),0,moved);
-      scheduleSave(); renderTabs(); clearDragState(); return;
+      scheduleSave(); renderAll(); clearDragState(); return;
     }
     if(!dragBlockId) return;
     e.preventDefault();
@@ -3764,8 +4071,25 @@
     return insertAt;
   }
 
+  function dockTargetAt(e,pane){
+    const tab=e.target.closest?.('.dock-tab[data-tab-id]');
+    if(e.target.closest?.('.dock-tabs') && pane.contains(e.target)){
+      const rect=tab?.getBoundingClientRect();
+      return {edge:null,beforeTabId:tab && e.clientX<rect.left+rect.width/2?tab.dataset.tabId:tab?.nextElementSibling?.dataset.tabId||null};
+    }
+    const rect=pane.getBoundingClientRect();
+    const x=(e.clientX-rect.left)/rect.width, y=(e.clientY-rect.top)/rect.height;
+    const distances=[['left',x],['right',1-x],['top',y],['bottom',1-y]].sort((a,b)=>a[1]-b[1]);
+    const draggedTab=state.openTabs.find(tab=>tab.id===dragTabId);
+    return {edge:draggedTab?.kind==='page' && distances[0][1]<.23?distances[0][0]:null,beforeTabId:null};
+  }
+  function clearDockIndicators(){
+    document.querySelectorAll('.dock-drop-left,.dock-drop-right,.dock-drop-top,.dock-drop-bottom,.dock-drop-center').forEach(node=>node.classList.remove('dock-drop-left','dock-drop-right','dock-drop-top','dock-drop-bottom','dock-drop-center'));
+    dockDrop=null;
+  }
   function clearDragState(){
     dragBlockId=null; dragTabId=null; tableAxisDrag=null;
+    clearDockIndicators();
     clearTableAxisDropIndicators();
     document.querySelectorAll('.dragging,.drop-before,.drop-after,.column-drop-target,.tab-drop-before,.tab-drop-after').forEach(x=>x.classList.remove('dragging','drop-before','drop-after','column-drop-target','tab-drop-before','tab-drop-after'));
   }
@@ -3777,11 +4101,11 @@
     return page;
   }
 
-  function createPage(parentId=null){
+  function createPage(parentId=null,groupId=state.activeEditorGroupId){
     state.mainView='page';
     const page={id:uid('page'),parentId,title:'Untitled',icon:'📄',favorite:false,expanded:true,blocks:[newTextBlock()]};
     state.pages.push(page); if(parentId){ const parent=pageById(parentId); if(parent) parent.expanded=true; }
-    createTab(page.id,true); scheduleSave(); renderAll(); setTimeout(()=>{ els.pageTitle.focus(); selectAllContent(els.pageTitle); },0);
+    createTab(page.id,true,groupId); scheduleSave(); renderAll(); setTimeout(()=>{ els.pageTitle?.focus(); if(els.pageTitle) selectAllContent(els.pageTitle); },0);
   }
 
   function deletePage(id){
@@ -3789,6 +4113,7 @@
     if(ids.has(state.currentPageId)) cancelPageOperations();
     state.pages=state.pages.filter(p=>!ids.has(p.id));
     state.openTabs=(state.openTabs||[]).filter(tab=>tab.kind==='graph' || !ids.has(tab.pageId));
+    repairEditorGroups();
     if(!(state.openTabs||[]).some(tab=>tab.id===state.activeTabId)) state.activeTabId=null;
     if(ids.has(state.currentPageId)){
       const next=state.openTabs.at(-1)||null;
@@ -4271,7 +4596,7 @@
   }
 
   function onBeforeInput(e){
-    if(e.target===els.pageTitle && ['insertParagraph','insertLineBreak'].includes(e.inputType)) e.preventDefault();
+    if((e.target===els.pageTitle || e.target.matches?.('[data-dock-title]')) && ['insertParagraph','insertLineBreak'].includes(e.inputType)) e.preventDefault();
   }
 
   function onPaste(e){
@@ -4281,7 +4606,7 @@
       if(file){ e.preventDefault(); loadPageIconFile(file); return; }
       if(!targetIsTextField && applyExternalIconTransfer(e.clipboardData)){ e.preventDefault(); return; }
     }
-    if(e.target===els.pageTitle){
+    if(e.target===els.pageTitle || e.target.matches?.('[data-dock-title]')){
       e.preventDefault();
       const text=String(e.clipboardData?.getData('text/plain')||'').replace(/[\r\n\t]+/g,' ').replace(/\s{2,}/g,' ');
       insertTextAtSelection(e.target,text);
@@ -4481,6 +4806,10 @@
     const actions=[
       {cmd:'new-page',icon:'＋',title:'New page',desc:'Create a blank page'},
       {cmd:'graph-view',icon:'◇',title:'Open graph view',desc:'Visualize links between pages'},
+      ...(state.mainView==='page' && currentPage() ? [
+        {cmd:'change-page-icon',icon:'☺',title:'Change page icon',desc:'Choose an icon for this page'},
+        {cmd:'page-comments',icon:'☵',title:'Page comments',desc:'Open comments for this page'}
+      ] : []),
       {cmd:'toggle-theme',icon:'◐',title:'Toggle theme',desc:'Switch light/dark mode'},
       {cmd:'settings',icon:'⚙',title:'Open settings',desc:'Workspace preferences'}
     ].filter(x=>!query||`${x.title} ${x.desc}`.toLowerCase().includes(query));
@@ -4495,11 +4824,13 @@
     if(cmd==='open-page') openPage(pageId);
     if(cmd==='new-page') createPage();
     if(cmd==='graph-view') openGraphTab();
+    if(cmd==='change-page-icon') showIconMenu(els.pageIcon?.classList.contains('hidden')?els.pageTitle:els.pageIcon);
+    if(cmd==='page-comments') openComments();
     if(cmd==='toggle-theme') cycleTheme();
-    if(cmd==='settings'){ updateSettingsText(); els.settingsModal.classList.remove('hidden'); }
+    if(cmd==='settings') openSettings();
     if(cmd==='new-child') createPage(pageId);
     if(cmd==='duplicate-page') duplicatePage(pageId);
-    if(cmd==='toggle-favorite'){ const p=pageById(pageId); p.favorite=!p.favorite; scheduleSave(); renderSidebar(); if(pageId===state.currentPageId)els.favoriteBtn.textContent=p.favorite?'★':'☆'; }
+    if(cmd==='toggle-favorite'){ const p=pageById(pageId); p.favorite=!p.favorite; scheduleSave(); renderSidebar(); }
     if(cmd==='delete-page') deletePage(pageId);
   }
 
@@ -4566,7 +4897,7 @@
     const matches=EMOJI_CATALOG.filter(item=>!q || item.emoji.includes(q) || item.name.toLowerCase().includes(q));
     host.innerHTML=matches.length?`<div class="icon-picker-grid">${matches.map(item=>`<button class="icon-picker-item ${p?.icon===item.emoji?'selected':''}" data-icon-choice="${escapeHtml(item.emoji)}" title="${escapeHtml(item.name)}">${escapeHtml(item.emoji)}</button>`).join('')}</div>`:'<div class="icon-picker-empty">No icons found</div>';
   }
-  function setPageIcon(icon,pageId=state.currentPageId){ const p=pageById(pageId); if(!p || state.currentPageId!==pageId)return; p.icon=icon; scheduleSave(); els.pageMetaMenu.classList.add('hidden'); renderPage(); renderSidebar(); renderTabs(); renderRightSidebar(); }
+  function setPageIcon(icon,pageId=state.currentPageId){ const p=pageById(pageId); if(!p || state.currentPageId!==pageId)return; p.icon=icon; scheduleSave(); els.pageMetaMenu.classList.add('hidden'); renderAll(); }
   function applyExternalIconUrl(value){
     const url=normalizeExternalIconUrl(value);
     if(!url){ toast('Enter a valid image URL'); return; }
@@ -4631,8 +4962,8 @@
   }
   function commentHTML(c){ return `<div class="comment-item"><div class="comment-avatar">YOU</div><div class="comment-body"><div class="comment-meta"><span class="comment-author">You</span><span class="comment-time">${escapeHtml(formatCommentTime(c.createdAt))}</span><button class="comment-delete" data-comment-delete="${c.id}" title="Delete comment">×</button></div><div class="comment-text">${escapeHtml(c.text||'')}</div></div></div>`; }
   function formatCommentTime(value){ const d=new Date(value); if(Number.isNaN(d.getTime()))return ''; return d.toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
-  function addPageComment(){ const input=els.pageComments.querySelector('[data-comment-input]'); const text=input?.value.trim(); if(!text)return; const p=currentPage(); if(!p.comments)p.comments=[]; p.comments.push({id:uid('comment'),text,createdAt:new Date().toISOString()}); scheduleSave(); renderPageComments(); els.addCommentBtn.textContent=`Comments ${p.comments.length}`; requestAnimationFrame(()=>els.pageComments.querySelector('[data-comment-input]')?.focus()); }
-  function deletePageComment(id){ const p=currentPage(); p.comments=(p.comments||[]).filter(c=>c.id!==id); scheduleSave(); renderPageComments(); els.addCommentBtn.textContent=p.comments.length?`Comments ${p.comments.length}`:'Add comment'; }
+  function addPageComment(){ const input=els.pageComments.querySelector('[data-comment-input]'); const text=input?.value.trim(); if(!text)return; const p=currentPage(); if(!p.comments)p.comments=[]; p.comments.push({id:uid('comment'),text,createdAt:new Date().toISOString()}); scheduleSave(); renderPageComments(); requestAnimationFrame(()=>els.pageComments.querySelector('[data-comment-input]')?.focus()); }
+  function deletePageComment(id){ const p=currentPage(); p.comments=(p.comments||[]).filter(c=>c.id!==id); scheduleSave(); renderPageComments(); }
 
 
   function applyTheme(){
@@ -4643,6 +4974,54 @@
     scheduleMermaidPreviews();
   }
   function cycleTheme(){ const options=['system','light','dark']; state.theme=options[(options.indexOf(state.theme)+1)%options.length]; scheduleSave(); applyTheme(); toast(`Theme: ${state.theme}`); }
+  function openSettings(view='general'){
+    shortcutCaptureAction=null;
+    updateSettingsText(); renderShortcutSettings(); setSettingsView(view);
+    els.settingsModal.classList.remove('hidden');
+  }
+  function setSettingsView(view){
+    const selected=['general','shortcuts'].includes(view)?view:'general';
+    if(selected!=='shortcuts'&&shortcutCaptureAction){ shortcutCaptureAction=null; renderShortcutSettings(); }
+    document.querySelectorAll('[data-settings-tab]').forEach(tab=>{
+      const active=tab.dataset.settingsTab===selected;
+      tab.classList.toggle('active',active); tab.setAttribute('aria-selected',String(active));
+    });
+    document.querySelectorAll('[data-settings-view]').forEach(panel=>panel.classList.toggle('hidden',panel.dataset.settingsView!==selected));
+  }
+  function renderShortcutSettings(){
+    if(!els.shortcutList) return;
+    els.shortcutList.innerHTML=SHORTCUT_ACTIONS.map(({id,label})=>{
+      const recording=shortcutCaptureAction===id;
+      const visibleLabel=id==='redo'&&state.shortcuts.redo===DEFAULT_SHORTCUTS.redo?'Redo (Ctrl/Cmd+Y also works)':label;
+      return `<div class="shortcut-row"><span class="shortcut-label">${visibleLabel}</span><button type="button" class="shortcut-binding ${recording?'recording':''}" data-shortcut-action="${id}" aria-label="Set shortcut for ${label}">${recording?'Press keys…':formatShortcut(state.shortcuts?.[id])}</button></div>`;
+    }).join('');
+  }
+  function resetShortcuts(){
+    shortcutCaptureAction=null; state.shortcuts={...DEFAULT_SHORTCUTS}; scheduleSave(); renderShortcutSettings(); toast('Shortcuts reset to defaults');
+  }
+  function shortcutActionForEvent(event){
+    const shortcut=shortcutFromEvent(event);
+    return Object.keys(state.shortcuts||{}).find(action=>shortcut && state.shortcuts[action]===shortcut)||null;
+  }
+  function runShortcutAction(action){
+    if(action==='undo'){ undoWorkspace(); return; }
+    if(action==='redo'){ redoWorkspace(); return; }
+    if(action==='search'){ openCommandPalette(); return; }
+    if(action==='favorite'){
+      const page=state.mainView==='page'&&state.currentPageId!=='__home__'?currentPage():null; if(!page)return;
+      page.favorite=!page.favorite; scheduleSave(); renderSidebar(); toast(page.favorite?'Added to favorites':'Removed from favorites'); return;
+    }
+    if(action==='comments'){ if(state.mainView==='page'&&state.currentPageId!=='__home__') openComments(); return; }
+    if(action==='share'){ if(state.mainView==='page'&&state.currentPageId!=='__home__') els.shareModal.classList.remove('hidden'); return; }
+    if(action==='toggleRightSidebar'){ state.rightSidebarOpen=!state.rightSidebarOpen; scheduleSave(); updateWorkspaceChrome(); return; }
+    if(action==='toggleTheme'){ cycleTheme(); return; }
+    if(action==='settings'){ openSettings(); return; }
+    if(action==='newPage'){ createPage(); return; }
+    if(action==='splitRight'){ splitActiveTab('right'); return; }
+    if(action==='splitDown'){ splitActiveTab('bottom'); return; }
+    if(action==='mergePanes'){ resetEditorLayout(); return; }
+    if(action==='graph') openGraphTab();
+  }
   function updateSettingsText(){ if(els.themeToggle) els.themeToggle.innerHTML=`<span class="select-btn-label">${state.theme[0].toUpperCase()+state.theme.slice(1)}</span>${chevronSvg('down','select-chevron')}`; }
 
   function exportWorkspace(){
