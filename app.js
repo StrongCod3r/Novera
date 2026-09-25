@@ -791,6 +791,22 @@
   }
 
   function wikiTitleKey(value){ return String(value||'').trim().replace(/\s+/g,' ').toLocaleLowerCase(); }
+  function blockSearchKey(value){
+    return String(value??'').normalize('NFKC').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase().replace(/[-_]+/g,' ').replace(/\s+/g,' ').trim();
+  }
+  function blockTypeMatchesQuery(blockType,query){
+    const key=blockSearchKey(query); if(!key) return true;
+    const words=blockSearchKey([blockType.name,blockType.desc,blockType.type].filter(Boolean).join(' ')).split(' ').filter(Boolean);
+    return key.split(' ').every(token=>words.some(word=>word.startsWith(token)));
+  }
+  function blockTypeSearchRank(blockType,query){
+    const key=blockSearchKey(query), name=blockSearchKey(blockType.name), type=blockSearchKey(blockType.type);
+    if(!key) return 0;
+    if(name===key) return 0;
+    if(name.startsWith(key)) return 1;
+    if(type===key || type.startsWith(key)) return 2;
+    return 3;
+  }
 
   function pageByTitle(title){
     const key=wikiTitleKey(title); if(!key) return null;
@@ -3355,6 +3371,7 @@
     }
     if(!els.slashMenu.classList.contains('hidden')){
       const items=[...els.slashResults.querySelectorAll('[data-slash-type]')];
+      if(items.length) slashIndex=Math.max(0,Math.min(slashIndex,items.length-1)); else slashIndex=0;
       if(e.key==='ArrowDown'){ e.preventDefault(); slashIndex=Math.min(slashIndex+1,items.length-1); renderSlashSelection(); return; }
       if(e.key==='ArrowUp'){ e.preventDefault(); slashIndex=Math.max(slashIndex-1,0); renderSlashSelection(); return; }
       if(e.key==='Enter' && items[slashIndex]){ e.preventDefault(); items[slashIndex].click(); return; }
@@ -4367,7 +4384,8 @@
   }
   function hideSlashMenu(){ activeSlashBlockId=null; els.slashMenu.classList.add('hidden'); }
   function renderSlashResults(query=''){
-    const q=query.toLowerCase().trim(); const items=BLOCK_TYPES.filter(x=>!q||`${x.name} ${x.desc} ${x.type}`.toLowerCase().includes(q));
+    const items=BLOCK_TYPES.filter(x=>blockTypeMatchesQuery(x,query)).sort((a,b)=>blockTypeSearchRank(a,query)-blockTypeSearchRank(b,query));
+    slashIndex=0;
     const groups=[...new Set(items.map(x=>x.group))]; let html='';
     groups.forEach(g=>{ html+=`<div class="slash-group">${g}</div>`; html+=items.filter(x=>x.group===g).map(x=>`<button class="slash-item" data-slash-type="${x.type}"><span class="slash-icon">${x.icon}</span><span><div class="slash-name">${x.name}</div><div class="slash-desc">${x.desc}</div></span></button>`).join(''); });
     els.slashResults.innerHTML=html; renderSlashSelection();
