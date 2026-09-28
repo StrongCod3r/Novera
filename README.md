@@ -1,16 +1,26 @@
 # Novera
 
-A fast, local-first workspace built with plain HTML, CSS and JavaScript, with no build step.
+A fast workspace built with TypeScript, modular DOM components, Vite and Firebase with an IndexedDB fallback.
 
 ## Run
 
-Open `index.html` directly in a modern browser, or serve the folder:
+With pnpm:
 
 ```bash
-python -m http.server 8080
+pnpm install
+pnpm run dev
 ```
 
-Then open http://localhost:8080.
+Or with npm:
+
+```bash
+npm install
+npm run dev
+```
+
+Then open the URL printed by Vite.
+
+For a production check, run `npm run build`. To validate the typed modules without emitting files, run `npm run typecheck`.
 
 ## Included
 
@@ -26,7 +36,8 @@ Then open http://localhost:8080.
 - Command palette (`Ctrl/Cmd + K`)
 - Notion-style `/Link to page` block for referencing existing pages without changing their hierarchy; page references feed backlinks
 - Interactive Graph View rendered as a normal editor tab, with page nodes, link edges, search, zoom, and node navigation
-- IndexedDB persistence for local-first workspace data
+- Firebase Firestore persistence by default, with the configured IndexedDB store as a durable offline cache and fallback
+- IndexedDB persistence remains available by changing `provider` to `'indexeddb'` in `src/config.ts`
 - Light/dark/system themes (`Ctrl/Cmd + Shift + L`)
 - JSON workspace import/export
 - Responsive layout
@@ -39,7 +50,7 @@ This is a local-first front-end clone/prototype. Real multi-user collaboration, 
 
 ## Standalone build
 
-`index.html` loads the stylesheet from `styles.css` and keeps the application JavaScript inline.
+`index.html` loads the stylesheet from `styles.css` and runs the application as a Vite module.
 
 - VS Code-style page tabs: persistent open tabs, drag-to-reorder, close, middle-click close, Ctrl/Cmd+W and Ctrl/Cmd+Tab navigation.
 
@@ -50,7 +61,7 @@ This is a local-first front-end clone/prototype. Real multi-user collaboration, 
 
 ## Vaults
 
-The left sidebar footer includes a vault selector. Multiple local vaults are supported, each with independent pages, tabs, favorites, and layout state. You can create, rename, switch, and delete vaults. Vault data is persisted exclusively in IndexedDB (`novera-local-workspace`). No LocalStorage compatibility or legacy-data migration layer is maintained.
+The left sidebar footer includes a vault selector. Multiple vaults are supported, each with independent pages, tabs, favorites, and layout state. You can create, rename, switch, and delete them. Firebase Firestore is the active backend; IndexedDB remains available through the storage configuration. No LocalStorage compatibility or legacy-data migration layer is maintained.
 
 
 ## Recent editor features
@@ -96,9 +107,14 @@ The Files/Favorites sidebar keeps vertical overflow disabled unless its current 
 
 ## Source layout
 
-- `index.html` — standalone build with CSS and JavaScript embedded.
+- `index.html` — semantic application shell and static UI markup.
 - `styles.css` — modular stylesheet source.
-- `app.js` — modular JavaScript source.
+- `src/main.ts` — typed application entry point.
+- `src/app.ts` — editor orchestration and UI behavior.
+- `src/storage.ts` — `StorageGateway` contract plus Firebase and IndexedDB adapters.
+- `src/config.ts` — typed Firebase and storage configuration.
+- `src/mermaid-preview.ts` — Mermaid code-preview utilities.
+- `tsconfig.json` — TypeScript compiler configuration.
 - `README.md` — project documentation.
 
 The repository is kept in sync with the complete current source after each finished code change.

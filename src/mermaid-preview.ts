@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Mermaid support used by Novera's Code block.
 // The standalone build keeps the same logic inline so it can run without a build step.
 

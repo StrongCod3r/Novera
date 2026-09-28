@@ -1,13 +1,25 @@
-(() => {
-  'use strict';
+// The editor is intentionally migrated as a single feature module first. Its
+// persistence boundary is typed and isolated in src/storage.ts; the remaining
+// DOM-heavy feature code can therefore be migrated incrementally without
+// coupling the UI to Firebase or IndexedDB.
+// @ts-nocheck
+import { STORAGE_CONFIG } from './config';
+import { createStorageGateway } from './storage';
 
-  const DB_NAME = 'novera-local-workspace';
-  const DB_VERSION = 1;
-  const DB_META_STORE = 'meta';
-  const DB_VAULT_STORE = 'vaults';
-  const DB_REGISTRY_KEY = 'registry';
+  const configuredStorageGateway = createStorageGateway(STORAGE_CONFIG);
+  // Firebase and IndexedDB share one durable local cache. Firebase remains
+  // authoritative when there are no local pending changes, while the cache
+  // keeps the existing IndexedDB data available during an outage.
+  const localStorageGateway = createStorageGateway({...STORAGE_CONFIG,provider:'indexeddb'});
+  let storageGateway = configuredStorageGateway;
+  let firebaseConnectionHealthy = navigator.onLine !== false;
+  let firebaseReconnectTimer = null;
+  // Versioned so stale markers from the old fallback implementation cannot
+  // upload an unrelated IndexedDB workspace over Firebase on reconnect.
+  const OFFLINE_PENDING_KEY = 'novera-firebase-pending-sync-v3';
   const uid = (prefix = 'id') => `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
   const clone = obj => JSON.parse(JSON.stringify(obj));
+  const DEFAULT_PAGE_ICON = '📄';
   const MAIN_EDITOR_GROUP = 'editor_main';
   const DEFAULT_SHORTCUTS = Object.freeze({
     undo:'Mod+Z',redo:'Mod+Shift+Z',search:'Mod+K',favorite:'Mod+Shift+F',comments:'Mod+Alt+M',share:'Mod+Alt+S',
@@ -72,57 +84,14 @@
     name: "StrongCod3r's Space",
     theme: 'system',
     shortcuts: {...DEFAULT_SHORTCUTS},
-    currentPageId: 'welcome',
-    activeTabId: 'tab_welcome',
+    currentPageId: '__home__',
+    activeTabId: null,
     activeEditorGroupId: MAIN_EDITOR_GROUP,
-    editorLayout: {type:'group',id:MAIN_EDITOR_GROUP,activeTabId:'tab_welcome'},
-    openTabs: [{ id:'tab_welcome', pageId:'welcome' }],
+    editorLayout: {type:'group',id:MAIN_EDITOR_GROUP,activeTabId:null},
+    openTabs: [],
     sidebarOpen: true,
     leftPanelMode: 'files',
-    pages: [
-      {
-        id: 'welcome', parentId: null, title: 'Getting started', icon: '👋', favorite: true,
-        expanded: true,
-        blocks: [
-          { id:'b1', type:'text', text:'Welcome to Novera — a fast, local-first workspace built with plain HTML, CSS and JavaScript.' },
-          { id:'b2', type:'h2', text:'What you can do' },
-          { id:'b3', type:'bullet', text:'Create pages and nest them in the sidebar.' },
-          { id:'b4', type:'bullet', text:'Write with blocks, use slash commands, and drag blocks to reorder them.' },
-          { id:'b5', type:'bullet', text:'Create simple databases, to-do lists, toggles, quotes, code and callouts.' },
-          { id:'b6', type:'callout', text:'Tip: press Ctrl/Cmd + K to search. Type / in any empty block for the block menu.' },
-          { id:'b7', type:'h2', text:'Project roadmap' },
-          { id:'b8', type:'database', title:'Tasks', columns:['Name','Status','Owner'], rows:[['Polish editor','In progress','You'],['Build templates','Done','You'],['Ship MVP','Next','You']] },
-          { id:'b9', type:'h2', text:'Keyboard shortcuts' },
-          { id:'b10', type:'text', text:'Enter creates a block · Backspace on an empty block merges/removes it · Ctrl/Cmd+K opens search · Ctrl/Cmd+Z undoes · Ctrl/Cmd+Shift+Z redoes. Configure app shortcuts in Settings → Keyboard shortcuts.' }
-        ]
-      },
-      {
-        id: 'product', parentId: null, title: 'Product', icon: '🚀', favorite: true, expanded: true,
-        blocks: [
-          { id:'p1', type:'h1', text:'Product hub' },
-          { id:'p2', type:'text', text:'Keep specs, decisions, milestones and launch plans together.' },
-          { id:'p3', type:'h2', text:'This week' },
-          { id:'p4', type:'todo', text:'Finalize editor interactions', checked:true },
-          { id:'p5', type:'todo', text:'Review the landing page', checked:false },
-          { id:'p6', type:'todo', text:'Prepare launch notes', checked:false }
-        ]
-      },
-      {
-        id:'roadmap', parentId:'product', title:'Roadmap', icon:'🗺️', favorite:false, expanded:true,
-        blocks:[
-          {id:'r1',type:'text',text:'A lightweight product roadmap.'},
-          {id:'r2',type:'database',title:'Roadmap',columns:['Feature','Stage','Priority'],rows:[['Offline workspace','Shipped','High'],['Realtime collaboration','Planned','High'],['Calendar view','Planned','Medium']]}
-        ]
-      },
-      {
-        id:'notes', parentId:null, title:'Meeting notes', icon:'📝', favorite:false, expanded:true,
-        blocks:[
-          {id:'n1',type:'h2',text:'Weekly sync'},
-          {id:'n2',type:'text',text:'Add meeting notes here.'},
-          {id:'n3',type:'quote',text:'Write decisions down while context is fresh.'}
-        ]
-      }
-    ]
+    pages: []
   };
 
   const BLOCK_TYPES = [
@@ -222,7 +191,8 @@
     const value=String(icon||'').trim();
     return /^https?:\/\//i.test(value) || /^data:image\/(?:png|jpe?g|webp|gif|svg\+xml|x-icon|vnd\.microsoft\.icon)[;,]/i.test(value);
   }
-  function pageIconMarkup(icon,fallback='📄'){
+  function normalizePageIcon(icon){ return String(icon??'').trim()||DEFAULT_PAGE_ICON; }
+  function pageIconMarkup(icon,fallback=DEFAULT_PAGE_ICON){
     const value=String(icon||fallback||'');
     if(isExternalPageIcon(value)) return `<img class="external-page-icon" src="${escapeHtml(value)}" alt="" draggable="false">`;
     return escapeHtml(value);
@@ -253,6 +223,8 @@
   let shortcutCaptureAction = null;
   let dragBlockId = null;
   let dragTabId = null;
+  let dragPageId = null;
+  let pageDrop = null;
   let dockDrop = null;
   let tableAxisDrag = null;
   let activeImageBlockId = null;
@@ -285,7 +257,7 @@
     slashMenu:$('slashMenu'), slashSearch:$('slashSearch'), slashResults:$('slashResults'), emojiMenu:$('emojiMenu'), emojiResults:$('emojiResults'), blockMenu:$('blockMenu'), textFormatToolbar:$('textFormatToolbar'),
     shareModal:$('shareModal'), settingsModal:$('settingsModal'), themeToggle:$('themeToggle'), shortcutList:$('shortcutList'),
     importFile:$('importFile'), imageFileInput:$('imageFileInput'), pageIconFileInput:$('pageIconFileInput'), vaultSelect:$('vaultSelect'), createVaultBtn:$('createVaultBtn'), renameVaultBtn:$('renameVaultBtn'), deleteVaultBtn:$('deleteVaultBtn'),
-    vaultDialog:$('vaultDialog'), vaultDialogTitle:$('vaultDialogTitle'), vaultDialogInput:$('vaultDialogInput'), vaultDialogError:$('vaultDialogError'), vaultDialogConfirm:$('vaultDialogConfirm'), toast:$('toast')
+    vaultDialog:$('vaultDialog'), vaultDialogTitle:$('vaultDialogTitle'), vaultDialogInput:$('vaultDialogInput'), vaultDialogError:$('vaultDialogError'), vaultDialogConfirm:$('vaultDialogConfirm'), toast:$('toast'), connectionStatus:$('connectionStatus'), connectionStatusLabel:$('connectionStatusLabel'), connectionStatusProvider:$('connectionStatusProvider')
   };
   const baseEditorElements={pageTitle:els.pageTitle,pageIcon:els.pageIcon,pageComments:els.pageComments,blockEditor:els.blockEditor,emptyHint:els.emptyHint};
 
@@ -295,13 +267,13 @@
       name:'', theme:state?.theme || 'system', currentPageId:pageId, activeTabId:tabId, activeEditorGroupId:MAIN_EDITOR_GROUP,
       editorLayout:{type:'group',id:MAIN_EDITOR_GROUP,activeTabId:tabId}, openTabs:[{id:tabId,kind:'page',pageId,groupId:MAIN_EDITOR_GROUP}], sidebarOpen:true, rightSidebarOpen:true,
       leftPanelMode:'files', rightPanelMode:'outline', mainView:'page', sidebarWidth:276, rightSidebarWidth:286, shortcuts:{...DEFAULT_SHORTCUTS},
-      pages:[{id:pageId,parentId:null,title:'Untitled',icon:'📄',favorite:false,expanded:true,blocks:[newTextBlock()]}]
+      pages:[{id:pageId,parentId:null,title:'Untitled',icon:DEFAULT_PAGE_ICON,favorite:false,expanded:true,blocks:[newTextBlock()]}]
     };
   }
 
   function normalizeWorkspace(parsed){
-    if (!parsed?.pages?.length) parsed=clone(DEFAULT_WORKSPACE);
-    parsed.pages.forEach(p => { if ('cover' in p) delete p.cover; p.blocks=normalizeBlockTree(p.blocks); });
+    if (!parsed || !Array.isArray(parsed.pages)) parsed=clone(DEFAULT_WORKSPACE);
+    parsed.pages.forEach(p => { if ('cover' in p) delete p.cover; p.icon=normalizePageIcon(p.icon); p.blocks=normalizeBlockTree(p.blocks); });
     const pageIds = new Set(parsed.pages.map(p => p.id));
     parsed.editorLayout=normalizeEditorLayout(parsed.editorLayout);
     const groups=editorGroups(parsed.editorLayout);
@@ -317,7 +289,7 @@
       const pageId = tab.pageId || (pageIds.has(tab.id) ? tab.id : null);
       return pageId && pageIds.has(pageId) ? {id:tab.id && tab.pageId ? tab.id : uid('tab'),kind:'page',pageId,groupId} : null;
     }).filter(Boolean);
-    if (parsed.currentPageId !== '__home__' && !pageIds.has(parsed.currentPageId)) parsed.currentPageId = parsed.openTabs.find(t=>t.kind!=='graph'&&t.pageId)?.pageId || parsed.pages[0].id;
+    if (parsed.currentPageId !== '__home__' && !pageIds.has(parsed.currentPageId)) parsed.currentPageId = parsed.openTabs.find(t=>t.kind!=='graph'&&t.pageId)?.pageId || parsed.pages[0]?.id || '__home__';
     if(parsed.mainView==='graph'){
       let active=parsed.openTabs.find(t=>t.id===parsed.activeTabId && t.kind==='graph') || parsed.openTabs.find(t=>t.kind==='graph');
       if(!active){ active={id:uid('tab'),kind:'graph',groupId:fallbackGroup}; parsed.openTabs.push(active); }
@@ -360,56 +332,84 @@
   }
   function editorGroup(node,id){ return editorGroups(node).find(group=>group.id===id)||null; }
 
-  function openStorageDb(){
-    if(storageDbPromise) return storageDbPromise;
-    storageDbPromise=new Promise((resolve,reject)=>{
-      const request=indexedDB.open(DB_NAME,DB_VERSION);
-      request.onupgradeneeded=()=>{
-        const db=request.result;
-        if(!db.objectStoreNames.contains(DB_META_STORE)) db.createObjectStore(DB_META_STORE,{keyPath:'key'});
-        if(!db.objectStoreNames.contains(DB_VAULT_STORE)) db.createObjectStore(DB_VAULT_STORE,{keyPath:'id'});
-      };
-      request.onsuccess=()=>{
-        const db=request.result;
-        db.onversionchange=()=>db.close();
-        resolve(db);
-      };
-      request.onerror=()=>reject(request.error||new Error('Could not open IndexedDB'));
-      request.onblocked=()=>reject(new Error('IndexedDB upgrade is blocked by another Novera tab'));
-    });
-    return storageDbPromise;
-  }
-
-  function idbRequest(request){
-    return new Promise((resolve,reject)=>{
-      request.onsuccess=()=>resolve(request.result);
-      request.onerror=()=>reject(request.error||new Error('IndexedDB request failed'));
-    });
-  }
-
-  function idbTransactionDone(tx){
-    return new Promise((resolve,reject)=>{
-      tx.oncomplete=()=>resolve();
-      tx.onerror=()=>reject(tx.error||new Error('IndexedDB transaction failed'));
-      tx.onabort=()=>reject(tx.error||new Error('IndexedDB transaction aborted'));
-    });
-  }
-
-  async function idbGet(storeName,key){
-    const db=await openStorageDb();
-    const tx=db.transaction(storeName,'readonly');
-    // Attach the completion handlers before awaiting the request. IndexedDB may
-    // complete the transaction immediately after request success; attaching
-    // oncomplete afterwards can miss the event and leave initialization pending.
-    const done=idbTransactionDone(tx);
-    const value=await idbRequest(tx.objectStore(storeName).get(key));
-    await done;
-    return value;
-  }
-
   function queueStorageWrite(operation){
     storageWriteChain=storageWriteChain.then(operation,operation);
     return storageWriteChain;
+  }
+
+  function storageProviderLabel(){
+    return storageGateway.provider==='firebase' ? 'Firebase' : 'IndexedDB';
+  }
+
+  function setOfflineSyncPending(){
+    try{ localStorage.setItem(OFFLINE_PENDING_KEY,'1'); }catch{}
+  }
+
+  function clearOfflineSyncPending(){
+    try{ localStorage.removeItem(OFFLINE_PENDING_KEY); }catch{}
+  }
+
+  function hasOfflineSyncPending(){
+    try{ return localStorage.getItem(OFFLINE_PENDING_KEY)==='1'; }catch{ return false; }
+  }
+
+  function updateConnectionStatus(){
+    const usingFirebaseFallback=STORAGE_CONFIG.provider==='firebase' && storageGateway.provider==='indexeddb';
+    const firebaseIsOffline=storageGateway.provider==='firebase' && !firebaseConnectionHealthy;
+    const online=navigator.onLine===true && !usingFirebaseFallback && !firebaseIsOffline;
+    const connectionLabel=online?'Online':'Offline';
+    const providerLabel=storageProviderLabel();
+    els.connectionStatus?.classList.toggle('is-online',online);
+    els.connectionStatus?.classList.toggle('is-offline',!online);
+    if(els.connectionStatusLabel) els.connectionStatusLabel.textContent=connectionLabel;
+    if(els.connectionStatusProvider) els.connectionStatusProvider.textContent=providerLabel;
+    if(els.connectionStatus) els.connectionStatus.title=`${connectionLabel} · ${providerLabel} persistence`;
+  }
+
+  function scheduleFirebaseReconnect(){
+    if(STORAGE_CONFIG.provider!=='firebase' || firebaseReconnectTimer) return;
+    firebaseReconnectTimer=setTimeout(()=>{
+      firebaseReconnectTimer=null;
+      void reconnectFirebase();
+    },15000);
+  }
+
+  async function reconnectFirebase(){
+    if(STORAGE_CONFIG.provider!=='firebase') return false;
+    const wasUsingIndexedDb=storageGateway.provider==='indexeddb';
+    const hadPendingChanges=hasOfflineSyncPending();
+    const reachable=await configuredStorageGateway.reconnect();
+    if(!reachable){
+      firebaseConnectionHealthy=false;
+      updateConnectionStatus();
+      scheduleFirebaseReconnect();
+      return false;
+    }
+
+    try{
+      if(wasUsingIndexedDb && hadPendingChanges && activeVaultId){
+        await configuredStorageGateway.saveRegistry(clone(vaultRegistry));
+        await configuredStorageGateway.saveWorkspace(activeVaultId,clone(state));
+      }
+      storageGateway=configuredStorageGateway;
+      if(wasUsingIndexedDb && !hadPendingChanges){
+        // No local write was recorded, so Firebase remains authoritative.
+        // Hydrating here also refreshes the local mirror with the remote data.
+        await hydrateWorkspace();
+      }
+      clearOfflineSyncPending();
+      firebaseConnectionHealthy=storageGateway.provider==='firebase';
+      updateConnectionStatus();
+      if(wasUsingIndexedDb && hadPendingChanges) toast('Firebase connection restored. Local changes synchronized.');
+      return true;
+    }catch(error){
+      if(wasUsingIndexedDb) storageGateway=localStorageGateway;
+      firebaseConnectionHealthy=false;
+      updateConnectionStatus();
+      console.warn('Firebase is reachable but the local workspace could not be synchronized.',error);
+      scheduleFirebaseReconnect();
+      return false;
+    }
   }
 
   function sanitizeVaultRegistry(saved){
@@ -421,48 +421,83 @@
   }
 
   async function loadVaultRegistry(){
-    const saved=await idbGet(DB_META_STORE,DB_REGISTRY_KEY);
-    const existing=sanitizeVaultRegistry(saved?.value);
-    if(existing) return existing;
+    const existing=sanitizeVaultRegistry(await storageGateway.loadRegistry());
+    if(existing){
+      if(storageGateway.provider==='firebase') await localStorageGateway.saveRegistry(clone(existing));
+      return existing;
+    }
+
+    // If Firestore is available but has not been initialized yet, preserve the
+    // existing local workspace instead of replacing it with the demo vault.
+    if(storageGateway.provider==='firebase'){
+      const cached=sanitizeVaultRegistry(await localStorageGateway.loadRegistry());
+      if(cached){
+        const cachedVaultId=String(cached.activeVaultId);
+        const cachedWorkspace=await localStorageGateway.loadWorkspace(cachedVaultId);
+        await storageGateway.saveRegistry(clone(cached));
+        if(cachedWorkspace) await storageGateway.saveWorkspace(cachedVaultId,clone(cachedWorkspace));
+        return cached;
+      }
+    }
 
     const id=uid('vault');
     const name=(DEFAULT_WORKSPACE.name||'Novera Vault').trim()||'Novera Vault';
     const registry={activeVaultId:id,vaults:[{id,name}]};
     const workspace=normalizeWorkspace(clone(DEFAULT_WORKSPACE));
     workspace.name=name;
-
-    const db=await openStorageDb();
-    const tx=db.transaction([DB_META_STORE,DB_VAULT_STORE],'readwrite');
-    tx.objectStore(DB_META_STORE).put({key:DB_REGISTRY_KEY,value:clone(registry),createdAt:new Date().toISOString()});
-    tx.objectStore(DB_VAULT_STORE).put({id,workspace,updatedAt:new Date().toISOString()});
-    await idbTransactionDone(tx);
+    await storageGateway.saveRegistry(clone(registry));
+    await storageGateway.saveWorkspace(id,workspace);
+    if(storageGateway.provider==='firebase'){
+      await localStorageGateway.saveRegistry(clone(registry));
+      await localStorageGateway.saveWorkspace(id,clone(workspace));
+    }
     return registry;
   }
 
   function saveVaultRegistry(){
     const snapshot=clone(vaultRegistry);
     return queueStorageWrite(async()=>{
-      const db=await openStorageDb();
-      const tx=db.transaction(DB_META_STORE,'readwrite');
-      tx.objectStore(DB_META_STORE).put({key:DB_REGISTRY_KEY,value:snapshot,updatedAt:new Date().toISOString()});
-      await idbTransactionDone(tx);
+      if(STORAGE_CONFIG.provider==='firebase'){
+        setOfflineSyncPending();
+        if(storageGateway !== localStorageGateway) await localStorageGateway.saveRegistry(snapshot);
+      }
+      await runWithFirebaseFallback(()=>storageGateway.saveRegistry(snapshot));
+      if(storageGateway.provider==='firebase') clearOfflineSyncPending();
     }).catch(error=>{
-      console.error('Could not save vault registry',error);
-      toast('Could not save vault information to IndexedDB.');
+      markFirebaseFailure(error);
+      console.error(`Could not save vault registry to ${storageProviderLabel()}`,error);
+      toast(`Could not save vault information to ${storageProviderLabel()}.`);
     });
   }
 
   function activeVaultMeta(){ return vaultRegistry.vaults.find(v=>v.id===activeVaultId) || vaultRegistry.vaults[0]; }
 
+  function markFirebaseFailure(error){
+    if(storageGateway.provider!=='firebase') return;
+    firebaseConnectionHealthy=false;
+    updateConnectionStatus();
+    scheduleFirebaseReconnect();
+    console.warn('Firebase persistence is unavailable. Retrying connection.',error);
+  }
+
   async function loadState(vaultId=activeVaultId){
     try{
-      const record=await idbGet(DB_VAULT_STORE,vaultId);
-      const parsed=normalizeWorkspace(record?.workspace?clone(record.workspace):clone(DEFAULT_WORKSPACE));
+      let workspace=await storageGateway.loadWorkspace(vaultId);
+      if(storageGateway.provider==='firebase' && !workspace){
+        const cachedWorkspace=await localStorageGateway.loadWorkspace(vaultId);
+        if(cachedWorkspace){
+          workspace=clone(cachedWorkspace);
+          await storageGateway.saveWorkspace(vaultId,clone(cachedWorkspace));
+        }
+      }
+      if(storageGateway.provider==='firebase' && workspace) await localStorageGateway.saveWorkspace(vaultId,clone(workspace));
+      const parsed=normalizeWorkspace(workspace?clone(workspace):clone(DEFAULT_WORKSPACE));
       const meta=vaultRegistry.vaults.find(v=>v.id===vaultId);
       parsed.name=meta?.name||parsed.name||'Vault';
       return parsed;
     }catch(error){
-      console.error('Could not load workspace from IndexedDB',error);
+      if(storageGateway.provider==='firebase') throw error;
+      console.error(`Could not load workspace from ${storageProviderLabel()}`,error);
       const fallback=normalizeWorkspace(clone(DEFAULT_WORKSPACE));
       fallback.name=vaultRegistry.vaults.find(v=>v.id===vaultId)?.name||'Vault';
       return fallback;
@@ -475,22 +510,30 @@
     if(!vaultId) return Promise.resolve();
     const snapshot=clone(state);
     return queueStorageWrite(async()=>{
-      const db=await openStorageDb();
-      const tx=db.transaction(DB_VAULT_STORE,'readwrite');
-      tx.objectStore(DB_VAULT_STORE).put({id:vaultId,workspace:snapshot,updatedAt:new Date().toISOString()});
-      await idbTransactionDone(tx);
+      if(STORAGE_CONFIG.provider==='firebase'){
+        setOfflineSyncPending();
+        if(storageGateway !== localStorageGateway) await localStorageGateway.saveWorkspace(vaultId,snapshot);
+      }
+      await runWithFirebaseFallback(()=>storageGateway.saveWorkspace(vaultId,snapshot));
+      if(storageGateway.provider==='firebase') clearOfflineSyncPending();
     }).catch(error=>{
-      console.error('Could not save workspace to IndexedDB',error);
-      toast('Could not save workspace to IndexedDB.');
+      markFirebaseFailure(error);
+      console.error(`Could not save workspace to ${storageProviderLabel()}`,error);
+      toast(`Could not save workspace to ${storageProviderLabel()}.`);
     });
   }
 
   function deleteVaultFromStorage(id){
     return queueStorageWrite(async()=>{
-      const db=await openStorageDb();
-      const tx=db.transaction(DB_VAULT_STORE,'readwrite');
-      tx.objectStore(DB_VAULT_STORE).delete(id);
-      await idbTransactionDone(tx);
+      if(STORAGE_CONFIG.provider==='firebase'){
+        setOfflineSyncPending();
+        if(storageGateway !== localStorageGateway) await localStorageGateway.deleteWorkspace(id);
+      }
+      await runWithFirebaseFallback(()=>storageGateway.deleteWorkspace(id));
+      if(storageGateway.provider==='firebase') clearOfflineSyncPending();
+    }).catch(error=>{
+      markFirebaseFailure(error);
+      throw error;
     });
   }
 
@@ -661,31 +704,110 @@
   function pageById(id){ return state.pages.find(p => p.id === id); }
   function childrenOf(id){ return state.pages.filter(p => p.parentId === id); }
 
+  async function initializeStorageProvider(){
+    await storageGateway.initialize();
+  }
+
+  async function hydrateWorkspace(){
+    vaultRegistry=await loadVaultRegistry();
+    activeVaultId=vaultRegistry.activeVaultId;
+    state=await loadState(activeVaultId);
+    if(typeof state.sidebarOpen!=='boolean') state.sidebarOpen=true;
+    if(typeof state.rightSidebarOpen!=='boolean') state.rightSidebarOpen=true;
+    if(!['files','favorites'].includes(state.leftPanelMode)) state.leftPanelMode='files';
+    if(!['outline','backlinks'].includes(state.rightPanelMode)) state.rightPanelMode='outline';
+    if(!['page','graph'].includes(state.mainView)) state.mainView='page';
+    if(!Number.isFinite(state.sidebarWidth)) state.sidebarWidth=276;
+    if(!Number.isFinite(state.rightSidebarWidth)) state.rightSidebarWidth=286;
+    initializeHistoryForVault(activeVaultId,{reset:true});
+    applyTheme();
+    renderAll();
+  }
+
+  async function useIndexedDbFallback(error){
+    if(storageGateway.provider!=='firebase') return false;
+    console.warn('Firebase is unavailable. Falling back to IndexedDB for this session.',error);
+    firebaseConnectionHealthy=false;
+    storageGateway=localStorageGateway;
+    await storageGateway.initialize();
+    updateConnectionStatus();
+    scheduleFirebaseReconnect();
+    return true;
+  }
+
+  async function recoverPendingOfflineState(){
+    if(STORAGE_CONFIG.provider!=='firebase' || !hasOfflineSyncPending()) return false;
+    await localStorageGateway.initialize();
+    const localRegistry=await localStorageGateway.loadRegistry();
+    const localVaultId=localRegistry?.activeVaultId;
+    const localWorkspace=localVaultId ? await localStorageGateway.loadWorkspace(String(localVaultId)) : null;
+    if(!localRegistry || !localVaultId || !localWorkspace){
+      clearOfflineSyncPending();
+      return false;
+    }
+
+    if(await configuredStorageGateway.reconnect()){
+      try{
+        await configuredStorageGateway.saveRegistry(clone(localRegistry));
+        await configuredStorageGateway.saveWorkspace(String(localVaultId),clone(localWorkspace));
+        clearOfflineSyncPending();
+        return false;
+      }catch(error){
+        console.warn('Pending offline changes could not be synchronized yet.',error);
+      }
+    }
+
+    storageGateway=localStorageGateway;
+    firebaseConnectionHealthy=false;
+    updateConnectionStatus();
+    scheduleFirebaseReconnect();
+    return true;
+  }
+
+  async function runWithFirebaseFallback(operation){
+    try{
+      return await operation();
+    }catch(error){
+      if(storageGateway.provider!=='firebase') throw error;
+      await useIndexedDbFallback(error);
+      return operation();
+    }
+  }
+
   async function init(){
     // Interaction must never depend on storage initialization. Render and bind
-    // immediately, then hydrate the workspace from IndexedDB asynchronously.
+    // immediately, then hydrate the workspace from the configured backend asynchronously.
     applyTheme();
     bindEvents();
+    updateConnectionStatus();
     renderAll();
     try{
-      await openStorageDb();
-      vaultRegistry=await loadVaultRegistry();
-      activeVaultId=vaultRegistry.activeVaultId;
-      state=await loadState(activeVaultId);
-      if(typeof state.sidebarOpen!=='boolean') state.sidebarOpen=true;
-      if(typeof state.rightSidebarOpen!=='boolean') state.rightSidebarOpen=true;
-      if(!['files','favorites'].includes(state.leftPanelMode)) state.leftPanelMode='files';
-      if(!['outline','backlinks'].includes(state.rightPanelMode)) state.rightPanelMode='outline';
-      if(!['page','graph'].includes(state.mainView)) state.mainView='page';
-      if(!Number.isFinite(state.sidebarWidth)) state.sidebarWidth=276;
-      if(!Number.isFinite(state.rightSidebarWidth)) state.rightSidebarWidth=286;
-      initializeHistoryForVault(activeVaultId,{reset:true});
-      applyTheme();
-      renderAll();
+      await localStorageGateway.initialize();
+      const resumedOffline=await recoverPendingOfflineState();
+      if(!resumedOffline){
+        await initializeStorageProvider();
+        await hydrateWorkspace();
+      }else{
+        await hydrateWorkspace();
+      }
+      firebaseConnectionHealthy=true;
+      updateConnectionStatus();
     }catch(error){
-      console.error('Novera IndexedDB initialization failed',error);
+      if(storageGateway.provider==='firebase'){
+        firebaseConnectionHealthy=false;
+        updateConnectionStatus();
+        try{
+          await useIndexedDbFallback(error);
+          await hydrateWorkspace();
+          toast('Firebase is offline. Using IndexedDB locally for this session.');
+          return;
+        }catch(fallbackError){
+          console.error('Novera IndexedDB fallback initialization failed',fallbackError);
+        }
+      }
+      console.error(`Novera ${storageProviderLabel()} initialization failed`,error);
       renderAll();
-      toast('IndexedDB could not be initialized. Changes may not persist.');
+      toast(`${storageProviderLabel()} could not be initialized. Changes may not persist.`);
     }
   }
 
@@ -722,7 +844,7 @@
   function dockGroupMarkup(group){
     const tabs=groupTabs(group.id), selected=selectedGroupTab(group), page=selected?.kind==='page'?pageById(selected.pageId):null;
     const content=page?`<div class="dock-scroll"><article class="page dock-page" data-dock-page data-editor-group="${group.id}" data-page-id="${page.id}"><div class="note-inline-header"><button class="page-icon ${page.icon?'':'hidden'}" data-dock-icon title="Change icon">${page.icon?pageIconMarkup(page.icon,''):''}</button><h1 class="page-title" contenteditable="true" spellcheck="true" data-dock-title data-placeholder="Untitled">${escapeHtml(page.title||'')}</h1></div><div class="page-comments hidden" data-dock-comments></div><div class="block-editor" data-dock-blocks></div><div class="empty-hint" data-dock-empty>Type <b>/</b> for commands</div></article></div>`:'<div class="dock-empty">Drag a page tab here or press Ctrl/Cmd+Alt+N to create one.</div>';
-    return `<section class="dock-pane ${state.activeEditorGroupId===group.id?'active':''}" data-editor-group="${group.id}"><div class="dock-tabs"><div class="dock-tabs-scroll" role="tablist" aria-label="Open pages in pane">${tabs.map(tab=>dockTabMarkup(tab,tab.id===selected?.id)).join('')}</div><div class="dock-tab-spacer"></div></div><nav class="dock-breadcrumbs breadcrumbs" aria-label="Page path">${page?breadcrumbMarkup(page):''}</nav>${content}</section>`;
+    return `<section class="dock-pane ${state.activeEditorGroupId===group.id?'active':''}" data-editor-group="${group.id}"><div class="dock-tabs"><div class="dock-tabs-scroll" role="tablist" aria-label="Open pages in pane">${tabs.map(tab=>dockTabMarkup(tab,tab.id===selected?.id)).join('')}</div><div class="dock-tab-spacer"></div></div><nav class="dock-breadcrumbs breadcrumbs" aria-label="Page path">${page?breadcrumbBarMarkup(page):''}</nav>${content}</section>`;
   }
   function dockNodeMarkup(node){
     if(node.type==='group') return dockGroupMarkup(node);
@@ -982,11 +1104,53 @@
 
   function treeRowHTML(page, depth = 0, allowExpand = true){
     const kids = childrenOf(page.id);
-    return `<div class="page-tree-row ${page.id===state.currentPageId?'active':''}" data-page-id="${page.id}" style="padding-left:${depth*8}px">
+    return `<div class="page-tree-row ${page.id===state.currentPageId?'active':''}" data-page-id="${page.id}" draggable="true" style="padding-left:${depth*8}px">
       ${allowExpand && kids.length ? `<button class="tree-expand" data-action="toggle-page" title="Expand" aria-label="${page.expanded===false?'Expand':'Collapse'}">${chevronSvg(page.expanded===false?'right':'down','tree-chevron')}</button>` : `<span style="width:18px"></span>`}
       <button class="tree-page-btn" data-action="open-page" title="Open page · Middle-click for new tab"><span class="tree-icon">${pageIconMarkup(page.icon)}</span><span class="tree-title">${escapeHtml(page.title || 'Untitled')}</span></button>
-      <button class="tree-more" data-action="page-more" title="More" aria-label="More"><svg class="more-dots-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg></button>
+      <button class="tree-more" data-action="page-more" title="More" aria-label="More" aria-haspopup="menu" aria-expanded="false"><svg class="more-dots-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg></button>
     </div>`;
+  }
+
+  function pageIsDescendant(pageId,ancestorId){
+    let page=pageById(pageId);
+    while(page?.parentId){
+      if(page.parentId===ancestorId) return true;
+      page=pageById(page.parentId);
+    }
+    return false;
+  }
+
+  function pageDropMode(event,row){
+    const rect=row.getBoundingClientRect();
+    const relative=(event.clientY-rect.top)/Math.max(1,rect.height);
+    return relative<.3?'before':relative>.7?'after':'inside';
+  }
+
+  function clearPageDropIndicators(){
+    document.querySelectorAll('.page-drop-before,.page-drop-after,.page-drop-inside').forEach(row=>row.classList.remove('page-drop-before','page-drop-after','page-drop-inside'));
+    document.querySelectorAll('.sidebar-scroll.page-drop-root').forEach(sidebar=>sidebar.classList.remove('page-drop-root'));
+    pageDrop=null;
+  }
+
+  function canDropPage(sourceId,targetId){
+    if(!sourceId || !targetId || sourceId===targetId) return false;
+    return !pageIsDescendant(targetId,sourceId);
+  }
+
+  function movePageByDrop(sourceId,targetId=null,mode='root'){
+    const source=pageById(sourceId), target=targetId?pageById(targetId):null;
+    if(!source || (target && !canDropPage(sourceId,targetId))) return false;
+    const sourceIndex=state.pages.indexOf(source); if(sourceIndex<0) return false;
+    state.pages.splice(sourceIndex,1);
+    const parentId=target && mode==='inside' ? target.id : (target?.parentId||null);
+    source.parentId=parentId;
+    if(target && mode!=='inside'){
+      const targetIndex=state.pages.indexOf(target);
+      state.pages.splice(Math.max(0,targetIndex+(mode==='after'?1:0)),0,source);
+    }else state.pages.push(source);
+    if(parentId){ const parent=pageById(parentId); if(parent) parent.expanded=true; }
+    scheduleSave(); renderSidebar();
+    return true;
   }
 
   function wikiTitleKey(value){ return String(value||'').trim().replace(/\s+/g,' ').toLocaleLowerCase(); }
@@ -1132,7 +1296,7 @@
     let target=pageId?pageById(pageId):pageByTitle(title);
     if(!target){
       const clean=String(title||'').trim(); if(!clean) return;
-      target={id:uid('page'),parentId:null,title:clean,icon:'📄',favorite:false,expanded:true,blocks:[newTextBlock()]};
+      target={id:uid('page'),parentId:null,title:clean,icon:DEFAULT_PAGE_ICON,favorite:false,expanded:true,blocks:[newTextBlock()]};
       state.pages.push(target); toast(`Created ${clean}`);
     }
     state.mainView='page'; openPage(target.id,{newTab});
@@ -1173,13 +1337,27 @@
   function breadcrumbMarkup(page){
     const chain=[]; let cur=page;
     while(cur){ chain.unshift(cur); cur=cur.parentId?pageById(cur.parentId):null; }
-    return chain.map((p,i) => `<span class="crumb" data-crumb-id="${p.id}"><span class="crumb-icon">${pageIconMarkup(p.icon)}</span>${escapeHtml(p.title||'Untitled')}</span>${i<chain.length-1?'<span class="crumb-sep">/</span>':''}`).join('');
+    return chain.map((p,i) => `<span class="crumb" data-crumb-id="${p.id}"><span class="crumb-icon">${pageIconMarkup(p.icon)}</span><span class="crumb-label">${escapeHtml(p.title||'Untitled')}</span></span>${i<chain.length-1?'<span class="crumb-sep">/</span>':''}`).join('');
+  }
+  function breadcrumbBarMarkup(page){
+    if(!page) return '';
+    return `${breadcrumbMarkup(page)}${pageMenuButtonMarkup(page)}`;
+  }
+  function pageMenuButtonMarkup(page){
+    return `<button type="button" class="breadcrumb-page-menu-button" data-page-menu-trigger="${page.id}" title="Page options" aria-label="Page options" aria-haspopup="menu" aria-expanded="false"><svg class="more-dots-icon vertical" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="5" r="1.7"></circle><circle cx="12" cy="12" r="1.7"></circle><circle cx="12" cy="19" r="1.7"></circle></svg></button>`;
+  }
+  function updateBreadcrumbBar(container,page){
+    const button=container.querySelector('[data-page-menu-trigger]');
+    container.querySelectorAll('.crumb,.crumb-sep').forEach(item=>item.remove());
+    if(!page){ button?.remove(); return; }
+    if(button){ button.dataset.pageMenuTrigger=page.id; button.insertAdjacentHTML('beforebegin',breadcrumbMarkup(page)); }
+    else container.innerHTML=breadcrumbBarMarkup(page);
   }
   function renderBreadcrumbs(page){
-    els.breadcrumbs.innerHTML=breadcrumbMarkup(page);
+    updateBreadcrumbBar(els.breadcrumbs,page);
     if(!els.editorDock?.classList.contains('hidden')) els.editorDock.querySelectorAll('.dock-pane').forEach(pane=>{
       const group=editorGroup(state.editorLayout,pane.dataset.editorGroup), tab=group&&selectedGroupTab(group);
-      if(tab?.pageId===page.id) pane.querySelector('.dock-breadcrumbs').innerHTML=breadcrumbMarkup(page);
+      if(tab?.pageId===page.id) updateBreadcrumbBar(pane.querySelector('.dock-breadcrumbs'),page);
     });
   }
 
@@ -1202,6 +1380,16 @@
     });
   }
 
+  function toggleBlockHTML(block,gutter){
+    if(!Array.isArray(block.children)) block.children=[];
+    const children=block.open
+      ? `<div class="toggle-children" data-toggle-children="${block.id}">${block.children.map((child,i)=>blockHTML(child,i,block.children)).join('')}</div>`
+      : '';
+    const placeholder="Type '/' for commands";
+    const emptyState=block.text?'false':'true';
+    return `<div class="block-row toggle-block" data-block-id="${block.id}" data-type="toggle">${gutter}<div class="toggle-shell"><div class="toggle-header"><div class="toggle-prefix" aria-label="${block.open?'Collapse':'Expand'}" role="button" tabindex="0">${chevronSvg(block.open?'down':'right','toggle-chevron')}</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>${children}</div></div>`;
+  }
+
   function blockHTML(block, index, blocks){
     if (block.type === 'database') return databaseHTML(block);
     const placeholder = "Type '/' for commands";
@@ -1218,7 +1406,7 @@
     if (block.type === 'todo') return `<div class="block-row ${block.checked?'checked':''}" data-block-id="${block.id}" data-type="todo">${gutter}<input class="todo-box" type="checkbox" ${block.checked?'checked':''}><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>`;
     if (block.type === 'bullet') { const indent=listIndentLevel(block), marker=['•','◦','▪'][indent%3], offset=indent*24; return `<div class="block-row" data-block-id="${block.id}" data-type="bullet" data-list-indent="${indent}" style="--list-indent-offset:${offset}px">${gutter}<div class="list-prefix">${marker}</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>`; }
     if (block.type === 'number') { const indent=listIndentLevel(block), offset=indent*24; return `<div class="block-row" data-block-id="${block.id}" data-type="number" data-list-indent="${indent}" style="--list-indent-offset:${offset}px">${gutter}<div class="list-prefix">${numberForBlock(block.id, blocks)}.</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>`; }
-    if (block.type === 'toggle') return `<div class="block-row" data-block-id="${block.id}" data-type="toggle">${gutter}<div class="toggle-prefix" aria-label="${block.open?'Collapse':'Expand'}">${chevronSvg(block.open?'down':'right','toggle-chevron')}</div><div class="block-content" contenteditable="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>`;
+    if (block.type === 'toggle') return toggleBlockHTML(block, gutter);
     return `<div class="block-row" data-block-id="${block.id}" data-type="${block.type}">${gutter}<div class="block-content" contenteditable="true" spellcheck="true" data-placeholder="${placeholder}" data-empty="${emptyState}">${inlineTextHTML(block)}</div></div>`;
   }
 
@@ -2072,12 +2260,20 @@
     }
   }
 
+  function normalizeToggleBlock(block){
+    block.open=block.open===true;
+    if(!Array.isArray(block.children)) block.children=[];
+    block.children=normalizeBlockTree(block.children);
+    return block;
+  }
+
   function normalizeBlockTree(blocks){
     if(!Array.isArray(blocks)) return [];
     for(const block of blocks){
       if(!block || typeof block!=='object') continue;
       if(!block.id) block.id=uid('b');
       if(block.type==='table') normalizeSimpleTableBlock(block);
+      if(block.type==='toggle') normalizeToggleBlock(block);
       if(block.type==='link'){ if(typeof block.text!=='string') block.text=''; if(typeof block.url!=='string') block.url=''; }
       if(block.type==='page-link' && typeof block.pageId!=='string') block.pageId='';
       if(['text','h1','h2','h3','bullet','number','todo','toggle','quote','callout'].includes(block.type)){ inlineLinksForBlock(block); inlineFormatsForBlock(block); }
@@ -2091,6 +2287,7 @@
     for(const block of blocks||[]){
       out.push(block);
       if(block?.type==='columns') for(const col of block.columns||[]) flattenBlocks(col.blocks,out);
+      if(block?.type==='toggle') flattenBlocks(block.children,out);
     }
     return out;
   }
@@ -2901,6 +3098,22 @@
     requestAnimationFrame(()=>{ const input=els.pageComments?.querySelector('[data-comment-input]'); if(input){ input.value=quoted?`“${quoted}” — `:''; input.focus(); input.setSelectionRange(input.value.length,input.value.length); } });
   }
 
+  function handleWindowOnline(){
+    firebaseConnectionHealthy=true;
+    updateConnectionStatus();
+    void reconnectFirebase();
+  }
+
+  function handleWindowOffline(){
+    firebaseConnectionHealthy=false;
+    updateConnectionStatus();
+    if(storageGateway.provider==='firebase') void useIndexedDbFallback(new Error('Browser is offline'));
+  }
+
+  function handleVisibilityChange(){
+    if(!document.hidden && (storageGateway.provider==='indexeddb' || !firebaseConnectionHealthy)) void reconnectFirebase();
+  }
+
   function bindEvents(){
     if(eventsBound) return;
     eventsBound=true;
@@ -2930,6 +3143,9 @@
     document.addEventListener('selectionchange', scheduleTextFormatToolbarFromSelection);
     document.addEventListener('wheel', onGraphWheel, {passive:false});
     document.addEventListener('dragend', clearDragState);
+    window.addEventListener('online', handleWindowOnline);
+    window.addEventListener('offline', handleWindowOffline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', onInlineSelectionInteractionBlur);
     document.addEventListener('scroll', e=>{ if(e.target?.matches?.('[data-code-editor]')) syncCodeScroll(e.target); if(e.target?.matches?.('.simple-table-scroll')) syncSimpleTableHandles(e.target.closest('.simple-table-block')); if(multiBlockSelection?.active) renderMultiBlockSelection(); }, true);
     window.addEventListener('resize', ()=>{ hideFloatingMenus(); hideTextFormatToolbar(); updateSidebarOverflow(); syncAllSimpleTableHandles(); if(multiBlockSelection?.active) renderMultiBlockSelection(); if(activeImageCropBlockId) scheduleImageCropDialogLayout(activeImageCropBlockId); });
@@ -3027,12 +3243,15 @@
     if (tabClose){ e.stopPropagation(); closeTab(tabClose.dataset.tabClose); return; }
     const tab = e.target.closest('.editor-tab[data-tab-id], .dock-tab[data-tab-id]');
     if (tab){ activateTab(tab.dataset.tabId); return; }
+    const pageMenuTrigger=e.target.closest('[data-page-menu-trigger]');
+    if(pageMenuTrigger){ showPageMenu(pageMenuTrigger,pageMenuTrigger.dataset.pageMenuTrigger); return; }
     const pageRow = e.target.closest('.page-tree-row');
     if (pageRow){
       const id=pageRow.dataset.pageId;
       if (e.target.closest('[data-action="toggle-page"]')) { const p=pageById(id); p.expanded=!p.expanded; scheduleSave(); renderSidebar(); return; }
       if (e.target.closest('[data-action="open-page"]')) { openPage(id); return; }
-      if (e.target.closest('[data-action="page-more"]')) { showPageMenu(pageRow,id); return; }
+      const pageMore=e.target.closest('[data-action="page-more"]');
+      if(pageMore){ showPageMenu(pageMore,id); return; }
     }
     const crumb=e.target.closest('[data-crumb-id]'); if(crumb){ openPage(crumb.dataset.crumbId); return; }
     const homeCard=e.target.closest('[data-home-page]'); if(homeCard){ openPage(homeCard.dataset.homePage); return; }
@@ -3061,9 +3280,9 @@
 
     const iconTab=e.target.closest('[data-icon-picker-tab]');
     if(iconTab){ switchIconPickerTab(iconTab.dataset.iconPickerTab); return; }
+    if(e.target.closest('[data-default-page-icon]')){ setPageIcon(DEFAULT_PAGE_ICON); return; }
     const iconChoice=e.target.closest('[data-icon-choice]');
     if(iconChoice){ setPageIcon(iconChoice.dataset.iconChoice); return; }
-    if(e.target.closest('[data-remove-icon]')){ setPageIcon(''); return; }
     if(e.target.closest('[data-custom-icon-submit]')){ const input=els.pageMetaMenu.querySelector('[data-custom-icon-input]'); if(input?.value.trim()) setPageIcon(input.value.trim().slice(0,12)); return; }
     if(e.target.closest('[data-external-icon-submit]')){ const input=els.pageMetaMenu.querySelector('[data-external-icon-url]'); if(input) applyExternalIconUrl(input.value); return; }
     if(e.target.closest('[data-external-icon-upload]')||e.target.closest('[data-external-icon-dropzone]')){ e.preventDefault(); els.pageIconFileInput?.click(); return; }
@@ -3122,7 +3341,7 @@
       if(e.target.closest('[data-image-crop-cancel]')){ cancelImageCrop(id); return; }
       if(e.target.closest('[data-image-crop-apply]')){ applyImageCrop(id); return; }
       if(e.target.closest('[data-image-download]')){ downloadImageBlock(id); return; }
-      if(e.target.closest('.toggle-prefix')){ const b=findBlock(id); b.open=!b.open; scheduleSave(); renderCurrentBlocksKeepFocus(); return; }
+      if(e.target.closest('.toggle-prefix')){ const b=findBlock(id); if(b?.type==='toggle'){ b.open=!b.open; scheduleSave(); renderCurrentBlocksKeepFocus(); } return; }
       if(e.target.matches('[data-db-add-row]')){ const b=findBlock(id); b.rows.push(b.columns.map(()=>'')); scheduleSave(); renderCurrentBlocksKeepFocus(); return; }
       if(e.target.matches('[data-db-add-col]')){ const b=findBlock(id); b.columns.push('Property'); b.rows.forEach(r=>r.push('')); scheduleSave(); renderCurrentBlocksKeepFocus(); return; }
     }
@@ -3702,6 +3921,14 @@
     if(e.target.matches('[data-external-icon-url]') && e.key==='Enter'){ e.preventDefault(); applyExternalIconUrl(e.target.value); return; }
     if(e.target.matches('[data-comment-input]') && (e.ctrlKey||e.metaKey) && e.key==='Enter'){ e.preventDefault(); addPageComment(); return; }
 
+    const togglePrefix=e.target.closest?.('.toggle-prefix');
+    if(togglePrefix && (e.key==='Enter' || e.key===' ')){
+      e.preventDefault();
+      const row=togglePrefix.closest('.block-row'), b=findBlock(row?.dataset.blockId);
+      if(b?.type==='toggle'){ b.open=!b.open; scheduleSave(); renderCurrentBlocksKeepFocus(); }
+      return;
+    }
+
     const content=e.target.closest('.block-content'); if(!content) return;
     const row=content.closest('.block-row'), id=row.dataset.blockId, location=findBlockLocation(id), b=location?.block, page=currentPage();
     if(!location||!b)return;
@@ -3742,6 +3969,10 @@
     if(e.key==='Enter' && !e.shiftKey){
       e.preventDefault();
       if(b.type==='database') return;
+      if(b.type==='toggle' && b.open){
+        addToggleChild(b.id);
+        return;
+      }
       if((b.type==='bullet' || b.type==='number' || b.type==='todo' || b.type==='toggle') && !(b.text||'').trim()){
         b.type='text';
         b.text='';
@@ -3771,6 +4002,14 @@
         els.pageTitle.focus();
         setCaretOffset(els.pageTitle,(page.title||'').length);
       });
+      return;
+    }
+    if(e.key==='Backspace' && (b.text||'')==='' && index===0 && location.parentBlock?.type==='toggle' && !(b.type==='toggle' && b.children?.length)){
+      e.preventDefault();
+      blocks.splice(index,1);
+      scheduleSave();
+      renderBlocks(page);
+      focusBlock(location.parentBlock.id,(location.parentBlock.text||'').length);
       return;
     }
     if(e.key==='Backspace' && (b.text||'')==='' && index>0){
@@ -3825,6 +4064,13 @@
         return;
       }
     }
+    const pageRow=e.target.closest('.page-tree-row[data-page-id]');
+    if(pageRow){
+      dragPageId=pageRow.dataset.pageId;
+      pageRow.classList.add('dragging');
+      if(e.dataTransfer){ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain',`page:${dragPageId}`); }
+      return;
+    }
     const tab=e.target.closest('.editor-tab[data-tab-id], .dock-tab[data-tab-id]');
     if(tab && !e.target.closest('.tab-close')){
       dragTabId=tab.dataset.tabId; tab.classList.add('dragging');
@@ -3846,6 +4092,28 @@
       tableAxisDrag.targetIndex=target.index;
       tableAxisDrag.after=target.after;
       renderTableAxisDropIndicator(tableBlock,tableAxisDrag.axis,target.index,target.after);
+      return;
+    }
+    if(dragPageId){
+      clearPageDropIndicators();
+      const row=e.target.closest?.('.page-tree-row[data-page-id]');
+      if(row){
+        const targetId=row.dataset.pageId;
+        if(!canDropPage(dragPageId,targetId)) return;
+        e.preventDefault();
+        if(e.dataTransfer) e.dataTransfer.dropEffect='move';
+        const mode=pageDropMode(e,row);
+        pageDrop={targetId,mode};
+        row.classList.add(`page-drop-${mode}`);
+        return;
+      }
+      const sidebar=e.target.closest?.('.sidebar-scroll');
+      if(sidebar){
+        e.preventDefault();
+        if(e.dataTransfer) e.dataTransfer.dropEffect='move';
+        pageDrop={targetId:null,mode:'root'};
+        sidebar.classList.add('page-drop-root');
+      }
       return;
     }
     const iconDrop=!dragTabId && !dragBlockId ? e.target.closest?.('[data-external-icon-dropzone]') : null;
@@ -3908,6 +4176,12 @@
           });
         }
       }
+      clearDragState();
+      return;
+    }
+    if(dragPageId){
+      e.preventDefault();
+      if(pageDrop) movePageByDrop(dragPageId,pageDrop.targetId||null,pageDrop.mode||'root');
       clearDragState();
       return;
     }
@@ -4088,14 +4362,15 @@
     dockDrop=null;
   }
   function clearDragState(){
-    dragBlockId=null; dragTabId=null; tableAxisDrag=null;
+    dragBlockId=null; dragTabId=null; dragPageId=null; tableAxisDrag=null;
+    clearPageDropIndicators();
     clearDockIndicators();
     clearTableAxisDropIndicators();
     document.querySelectorAll('.dragging,.drop-before,.drop-after,.column-drop-target,.tab-drop-before,.tab-drop-after').forEach(x=>x.classList.remove('dragging','drop-before','drop-after','column-drop-target','tab-drop-before','tab-drop-after'));
   }
 
   function createSubpageForBlock(parentId){
-    const page={id:uid('page'),parentId,title:'Untitled',icon:'📄',favorite:false,expanded:true,blocks:[newTextBlock()]};
+    const page={id:uid('page'),parentId,title:'Untitled',icon:DEFAULT_PAGE_ICON,favorite:false,expanded:true,blocks:[newTextBlock()]};
     state.pages.push(page);
     const parent=pageById(parentId); if(parent) parent.expanded=true;
     return page;
@@ -4103,7 +4378,7 @@
 
   function createPage(parentId=null,groupId=state.activeEditorGroupId){
     state.mainView='page';
-    const page={id:uid('page'),parentId,title:'Untitled',icon:'📄',favorite:false,expanded:true,blocks:[newTextBlock()]};
+    const page={id:uid('page'),parentId,title:'Untitled',icon:DEFAULT_PAGE_ICON,favorite:false,expanded:true,blocks:[newTextBlock()]};
     state.pages.push(page); if(parentId){ const parent=pageById(parentId); if(parent) parent.expanded=true; }
     createTab(page.id,true,groupId); scheduleSave(); renderAll(); setTimeout(()=>{ els.pageTitle?.focus(); if(els.pageTitle) selectAllContent(els.pageTitle); },0);
   }
@@ -4141,6 +4416,11 @@
         normalizeColumnsBlock(block);
         for(const col of block.columns){ const found=findBlockLocation(id,col.blocks,block,col); if(found)return found; }
       }
+      if(block?.type==='toggle'){
+        normalizeToggleBlock(block);
+        const found=findBlockLocation(id,block.children,block,null);
+        if(found)return found;
+      }
     }
     return null;
   }
@@ -4169,6 +4449,10 @@
         normalizeColumnsBlock(block);
         for(const col of block.columns) removeBlockOccurrences(id,col.blocks,holder,emptiedLists);
       }
+      if(block?.type==='toggle'){
+        normalizeToggleBlock(block);
+        removeBlockOccurrences(id,block.children,holder,emptiedLists);
+      }
     }
     if(!blocks.length) emptiedLists.add(blocks);
     return holder.block;
@@ -4177,20 +4461,30 @@
   function isTextLikeBlock(block){ return !!block && ['text','h1','h2','h3','bullet','number','todo','toggle','quote','callout'].includes(block.type); }
   function ensureBlockList(blocks){ if(Array.isArray(blocks)&&!blocks.length) blocks.push(newTextBlock()); }
   function addBlockAfter(id){ const page=currentPage(), loc=findBlockLocation(id); if(!loc)return; const b=newTextBlock(); loc.blocks.splice(loc.index+1,0,b); scheduleSave(); renderBlocks(page); focusBlock(b.id,0); }
+  function addToggleChild(id){
+    const page=currentPage(), block=findBlock(id); if(!page||block?.type!=='toggle') return;
+    if(!Array.isArray(block.children)) block.children=[];
+    block.open=true;
+    const child=newTextBlock(); block.children.push(child);
+    scheduleSave(); renderBlocks(page); focusBlock(child.id,0);
+  }
   function cloneBlockWithNewIds(block){
     const cp=clone(block); cp.id=uid('b');
     if(cp.type==='columns' && Array.isArray(cp.columns)) cp.columns=cp.columns.map(col=>({id:uid('col'),blocks:(col.blocks||[]).map(cloneBlockWithNewIds)}));
+    if(cp.type==='toggle' && Array.isArray(cp.children)) cp.children=cp.children.map(cloneBlockWithNewIds);
     return cp;
   }
   function blockContainsId(block,id){
     if(!block)return false; if(block.id===id)return true;
     if(block.type==='columns') return (block.columns||[]).some(col=>(col.blocks||[]).some(child=>blockContainsId(child,id)));
+    if(block.type==='toggle') return (block.children||[]).some(child=>blockContainsId(child,id));
     return false;
   }
   function blockTextFallback(block){
     if(!block)return '';
     if(block.type==='table') return (block.tableRows||[]).flat().filter(Boolean).join(' ');
     if(block.type==='columns') return flattenBlocks((block.columns||[]).flatMap(c=>c.blocks||[])).map(b=>b.text||b.caption||b.url||'').filter(Boolean).join(' ');
+    if(block.type==='toggle') return [block.text,...flattenBlocks(block.children||[]).map(child=>blockTextFallback(child))].filter(Boolean).join(' ');
     if(block.type==='link') return block.text||block.url||'';
     const linked=block.pageId?pageById(block.pageId):null;
     return block.text||block.caption||block.title||linked?.title||'';
@@ -4740,6 +5034,7 @@
     if(type==='image'){ b.src=''; b.caption=''; b.alt=''; delete b.text; }
     if(type==='link'){ b.text=''; b.url=''; }
     if(type==='code'){ b.language='bash'; b.codeWrap=false; b.codeLineNumbers=false; b.mermaidPreview=true; b.text=''; }
+    if(type==='toggle'){ b.open=false; if(!Array.isArray(b.children)) b.children=[]; }
     if(type==='table'){ b.tableRows=Array.from({length:3},()=>Array(3).fill('')); b.tableHeaderRow=false; b.tableHeaderColumn=false; delete b.text; }
     if(type==='columns'){ b.columns=Array.from({length:2},()=>({id:uid('col'),blocks:[newTextBlock()]})); delete b.text; }
     if(type==='database'){ b.title='Untitled database'; b.columns=['Name','Status','Owner']; b.rows=[['','','']]; delete b.text; }
@@ -4796,8 +5091,16 @@
   }
 
   function showPageMenu(row,id){
-    const r=row.getBoundingClientRect(); els.blockMenu.style.left=`${Math.min(r.right-120,window.innerWidth-220)}px`; els.blockMenu.style.top=`${Math.min(r.bottom+2,window.innerHeight-240)}px`; els.blockMenu.style.width='200px';
-    els.blockMenu.innerHTML=`<button class="block-menu-item" data-command="new-child" data-page-id="${id}">Add sub-page</button><button class="block-menu-item" data-command="duplicate-page" data-page-id="${id}">Duplicate</button><button class="block-menu-item" data-command="toggle-favorite" data-page-id="${id}">Toggle favorite</button><button class="block-menu-item danger" data-command="delete-page" data-page-id="${id}">Delete</button>`; els.blockMenu.classList.remove('hidden');
+    const page=pageById(id); if(!page) return;
+    const alreadyOpen=!els.blockMenu.classList.contains('hidden')&&els.blockMenu.querySelector('[data-command="delete-page"]')?.dataset.pageId===id;
+    hideFloatingMenus();
+    if(alreadyOpen) return;
+    const r=row.getBoundingClientRect(),width=200,height=156;
+    const left=Math.max(8,Math.min(r.right-width,window.innerWidth-width-8));
+    const top=r.bottom+height+8<=window.innerHeight?r.bottom+4:Math.max(8,r.top-height-4);
+    els.blockMenu.style.left=`${left}px`; els.blockMenu.style.top=`${top}px`; els.blockMenu.style.width=`${width}px`;
+    els.blockMenu.innerHTML=`<button class="block-menu-item" data-command="new-child" data-page-id="${id}">Add sub-page</button><button class="block-menu-item" data-command="duplicate-page" data-page-id="${id}">Duplicate</button><button class="block-menu-item" data-command="toggle-favorite" data-page-id="${id}">${page.favorite?'Remove from favorites':'Add to favorites'}</button><button class="block-menu-item danger" data-command="delete-page" data-page-id="${id}">Delete</button>`;
+    els.blockMenu.classList.remove('hidden'); row.setAttribute('aria-expanded','true');
   }
 
   function openCommandPalette(){ els.commandPalette.classList.remove('hidden'); els.commandSearch.value=''; commandIndex=0; renderCommandResults(''); setTimeout(()=>els.commandSearch.focus(),0); }
@@ -4821,6 +5124,7 @@
   function renderCommandSelection(){ const items=[...els.commandResults.querySelectorAll('.command-item')]; items.forEach((x,i)=>x.classList.toggle('selected',i===commandIndex)); items[commandIndex]?.scrollIntoView({block:'nearest'}); }
   function runCommand(cmd,pageId){
     els.commandPalette.classList.add('hidden'); els.blockMenu.classList.add('hidden');
+    document.querySelectorAll('[data-page-menu-trigger][aria-expanded="true"],[data-action="page-more"][aria-expanded="true"]').forEach(button=>button.setAttribute('aria-expanded','false'));
     if(cmd==='open-page') openPage(pageId);
     if(cmd==='new-page') createPage();
     if(cmd==='graph-view') openGraphTab();
@@ -4844,7 +5148,7 @@
     const p=currentPage(); hideFloatingMenus();
     const external=isExternalPageIcon(p.icon);
     const initialTab=external?'external':'emoji';
-    els.pageMetaMenu.innerHTML=`<div class="meta-menu-head"><span>Page icon</span>${p.icon?'<button class="meta-menu-remove" data-remove-icon>Remove</button>':''}</div>
+    els.pageMetaMenu.innerHTML=`<div class="meta-menu-head"><span>Page icon</span><button type="button" class="meta-menu-default" data-default-page-icon title="Use the default page icon" ${p.icon===DEFAULT_PAGE_ICON?'disabled':''}>Use default</button></div>
       <div class="icon-picker-tabs" role="tablist" aria-label="Icon source">
         <button type="button" class="icon-picker-tab ${initialTab==='emoji'?'active':''}" data-icon-picker-tab="emoji" role="tab" aria-selected="${initialTab==='emoji'}">Emoji</button>
         <button type="button" class="icon-picker-tab ${initialTab==='external'?'active':''}" data-icon-picker-tab="external" role="tab" aria-selected="${initialTab==='external'}">External</button>
@@ -4897,7 +5201,7 @@
     const matches=EMOJI_CATALOG.filter(item=>!q || item.emoji.includes(q) || item.name.toLowerCase().includes(q));
     host.innerHTML=matches.length?`<div class="icon-picker-grid">${matches.map(item=>`<button class="icon-picker-item ${p?.icon===item.emoji?'selected':''}" data-icon-choice="${escapeHtml(item.emoji)}" title="${escapeHtml(item.name)}">${escapeHtml(item.emoji)}</button>`).join('')}</div>`:'<div class="icon-picker-empty">No icons found</div>';
   }
-  function setPageIcon(icon,pageId=state.currentPageId){ const p=pageById(pageId); if(!p || state.currentPageId!==pageId)return; p.icon=icon; scheduleSave(); els.pageMetaMenu.classList.add('hidden'); renderAll(); }
+  function setPageIcon(icon,pageId=state.currentPageId){ const p=pageById(pageId); if(!p || state.currentPageId!==pageId)return; p.icon=normalizePageIcon(icon); scheduleSave(); els.pageMetaMenu.classList.add('hidden'); renderAll(); }
   function applyExternalIconUrl(value){
     const url=normalizeExternalIconUrl(value);
     if(!url){ toast('Enter a valid image URL'); return; }
@@ -5050,7 +5354,7 @@
   function selectAllContent(el){ const range=document.createRange(); range.selectNodeContents(el); const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
 
   function renderCurrentBlocksKeepFocus(){ renderBlocks(currentPage()); }
-  function hideFloatingMenus(){ els.slashMenu.classList.add('hidden'); hideEmojiMenu(); els.blockMenu.classList.add('hidden'); els.pageMetaMenu?.classList.add('hidden'); activeSlashBlockId=null; activePageLinkBlockId=null; }
+  function hideFloatingMenus(){ els.slashMenu.classList.add('hidden'); hideEmojiMenu(); els.blockMenu.classList.add('hidden'); document.querySelectorAll('[data-page-menu-trigger][aria-expanded="true"],[data-action="page-more"][aria-expanded="true"]').forEach(button=>button.setAttribute('aria-expanded','false')); els.pageMetaMenu?.classList.add('hidden'); activeSlashBlockId=null; activePageLinkBlockId=null; }
   function cancelPageOperations(){
     pageOperationEpoch+=1;
     clearMultiBlockSelection();
@@ -5083,5 +5387,6 @@
 
   function escapeHtml(s=''){ return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 
-  void init();
-})();
+  export async function bootstrap(){
+    await init();
+  }
